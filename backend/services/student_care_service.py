@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import date, datetime
+from math import prod
 
 from sqlalchemy import case
 from sqlalchemy.orm import Session
@@ -26,6 +27,7 @@ from database.models.student_tag_definition import StudentTagDefinition
 from database.models.teacher import Teacher
 from database.models.user import User
 from services.student_care_bayes_config_service import get_effective_bayes_config
+from services.student_care_bayes_service import apply_diminishing_returns
 from services.student_care_bayes_service import build_bayes_results
 from services.student_care_graph_service import student_care_graph_service
 from services.student_care_schema_guard import ensure_student_care_schema
@@ -145,6 +147,134 @@ DIMENSION_LABELS = {
     "behavior": "行为稳定风险",
 }
 
+MAJOR_INCIDENT_HINTS = (
+    "被打",
+    "挨打",
+    "受伤",
+    "勒索",
+    "威胁",
+    "恐吓",
+    "欺凌",
+    "霸凌",
+    "殴打",
+    "围堵",
+    "索要钱财",
+)
+
+MAJOR_INCIDENT_PROPAGATION_RULES = (
+    {
+        "from_dimension": "safety",
+        "to_dimension": "emotion",
+        "signal_type": "major_incident_emotion_spillover",
+        "signal_text": "恶性安全事件后，学生短期内更容易出现情绪受损与紧张警觉。",
+        "max_weight": 0.22,
+        "factor": 0.34,
+        "threshold": 0.2,
+        "min_weight": 0.08,
+    },
+    {
+        "from_dimension": "safety",
+        "to_dimension": "social",
+        "signal_type": "major_incident_social_withdrawal",
+        "signal_text": "恶性安全事件后，学生可能出现回避同伴、减少互动的社交退缩。",
+        "max_weight": 0.2,
+        "factor": 0.28,
+        "threshold": 0.2,
+        "min_weight": 0.06,
+    },
+    {
+        "from_dimension": "emotion",
+        "to_dimension": "study",
+        "signal_type": "major_incident_study_impact",
+        "signal_text": "事件引发的情绪受损可能进一步影响课堂专注和学习承压。",
+        "max_weight": 0.16,
+        "factor": 0.24,
+        "threshold": 0.14,
+        "min_weight": 0.05,
+    },
+    {
+        "from_dimension": "safety",
+        "to_dimension": "behavior",
+        "signal_type": "major_incident_behavior_instability",
+        "signal_text": "恶性安全事件后，学生近期更可能出现迟到、回避参与或行为波动。",
+        "max_weight": 0.18,
+        "factor": 0.22,
+        "threshold": 0.2,
+        "min_weight": 0.05,
+    },
+)
+
+MAJOR_INCIDENT_BN_NODE_CONFIG = {
+    "safety_threat": {
+        "label": "安全威胁持续",
+        "dimension": "safety",
+        "base_prior": 0.42,
+        "profile_weight": 0.45,
+        "impact": 0.92,
+        "parents": [],
+    },
+    "emotion_impact": {
+        "label": "情绪受损",
+        "dimension": "emotion",
+        "base_prior": 0.18,
+        "profile_weight": 0.32,
+        "impact": 0.78,
+        "parents": [("safety_threat", 0.64)],
+    },
+    "social_withdrawal": {
+        "label": "社交退缩",
+        "dimension": "social",
+        "base_prior": 0.14,
+        "profile_weight": 0.28,
+        "impact": 0.74,
+        "parents": [("safety_threat", 0.42), ("emotion_impact", 0.38)],
+    },
+    "study_decline": {
+        "label": "学习下滑",
+        "dimension": "study",
+        "base_prior": 0.1,
+        "profile_weight": 0.24,
+        "impact": 0.68,
+        "parents": [("emotion_impact", 0.46), ("social_withdrawal", 0.32)],
+    },
+    "behavior_instability": {
+        "label": "行为波动",
+        "dimension": "behavior",
+        "base_prior": 0.12,
+        "profile_weight": 0.3,
+        "impact": 0.76,
+        "parents": [("safety_threat", 0.5), ("emotion_impact", 0.34)],
+    },
+}
+
+MAJOR_INCIDENT_BN_EVIDENCE_RULES = {
+    "safety_threat": [
+        {"source": "behavior_event", "signal_type_prefixes": ("behavior_conflict", "behavior_bullying", "behavior_threat"), "lr": 2.4, "label": "行为安全事件"},
+        {"source": "assistant_summary", "signal_type_prefixes": ("assistant_safety_disclosure",), "lr": 2.8, "label": "AI 求助披露"},
+        {"source": "graph", "signal_type_prefixes": ("graph_manual_student_conflict", "graph_manual_student_bullying_link"), "lr": 1.8, "label": "图谱冲突/欺凌"},
+    ],
+    "emotion_impact": [
+        {"source": "major_incident", "signal_type_prefixes": ("major_incident_emotion_spillover",), "lr": 2.2, "label": "事件后情绪传导"},
+        {"source": "assistant_summary", "dimension": "emotion", "signal_type_prefixes": ("assistant_emotion_disclosure",), "lr": 1.8, "label": "AI 情绪表达"},
+        {"source": "attendance", "keywords": ("沮丧", "忧郁", "害怕", "紧张"), "lr": 1.5, "label": "出勤异常伴随情绪备注"},
+    ],
+    "social_withdrawal": [
+        {"source": "major_incident", "signal_type_prefixes": ("major_incident_social_withdrawal",), "lr": 2.0, "label": "事件后社交传导"},
+        {"source": "graph", "dimension": "social", "signal_type_prefixes": ("graph_manual_student_conflict",), "lr": 1.6, "label": "图谱冲突关系"},
+        {"source": "care_observation", "dimension": "emotion", "keywords": ("无法融入", "不想和同学说话", "被孤立"), "lr": 1.7, "label": "关怀观察中的社交退缩"},
+    ],
+    "study_decline": [
+        {"source": "score", "signal_type_prefixes": ("score_low_average", "score_medium_pressure", "score_drop"), "lr": 2.2, "label": "成绩/学习直接信号"},
+        {"source": "major_incident", "signal_type_prefixes": ("major_incident_study_impact",), "lr": 1.9, "label": "事件后学习传导"},
+        {"source": "attendance", "signal_type_prefixes": ("attendance_absent", "attendance_late"), "lr": 1.3, "label": "出勤扰动"},
+    ],
+    "behavior_instability": [
+        {"source": "major_incident", "signal_type_prefixes": ("major_incident_behavior_instability",), "lr": 2.0, "label": "事件后行为传导"},
+        {"source": "attendance", "signal_type_prefixes": ("attendance_late", "attendance_absent", "attendance_early_leave"), "lr": 1.5, "label": "出勤异常"},
+        {"source": "behavior_event", "dimension": "behavior", "signal_type_prefixes": ("behavior_",), "lr": 1.4, "label": "行为波动信号"},
+    ],
+}
+
 
 def get_student_care_profile(db: Session, current_user: User, student_id: int) -> dict:
     ensure_student_care_schema()
@@ -157,11 +287,11 @@ def get_student_care_profile(db: Session, current_user: User, student_id: int) -
     if permission_error:
         return permission_error
 
-    profile, signals, bayes_results = recalculate_student_care_profile(db, student)
+    profile, signals, bayes_results, incident_context = recalculate_student_care_profile(db, student)
     return success_response(
         data={
             "student": _serialize_student(student, db),
-            "profile": _serialize_profile(profile, bayes_results),
+            "profile": _serialize_profile(profile, bayes_results, incident_context),
             "signals": [_serialize_signal(item) for item in signals],
             "data_quality": _build_data_quality_summary(signals),
             "actions": _build_actions(profile),
@@ -180,20 +310,22 @@ def get_student_care_signals(db: Session, current_user: User, student_id: int) -
     if permission_error:
         return permission_error
 
-    _, signals, _ = recalculate_student_care_profile(db, student)
+    _, signals, _, _ = recalculate_student_care_profile(db, student)
     return success_response(data={"list": [_serialize_signal(item) for item in signals]})
 
 
 def recalculate_student_care_profile(
     db: Session,
     student: Student,
-) -> tuple[StudentCareProfile, list[StudentCareSignal], dict]:
+) -> tuple[StudentCareProfile, list[StudentCareSignal], dict, dict]:
     ensure_student_care_schema()
     db.rollback()
+    previous_profile = db.query(StudentCareProfile).filter(StudentCareProfile.student_id == student.id).first()
     db.query(StudentCareSignal).filter(StudentCareSignal.student_id == student.id).delete(synchronize_session=False)
 
     signals_to_create: list[StudentCareSignal] = []
-    dimension_scores: dict[str, float] = {key: 0.0 for key in DIMENSIONS}
+    base_dimension_scores: dict[str, float] = {key: 0.0 for key in DIMENSIONS}
+    spillover_scores: dict[str, float] = {key: 0.0 for key in DIMENSIONS}
     trend = "steady"
 
     tags = _parse_tags(student.tags)
@@ -226,7 +358,7 @@ def recalculate_student_care_profile(
             )
         )
         if weight:
-            dimension_scores[definition.dimension] += weight
+            base_dimension_scores[definition.dimension] += weight
 
     for tag in tags:
         if tag in handled_tags:
@@ -243,7 +375,7 @@ def recalculate_student_care_profile(
                     source="student_tag",
                 )
                 signals_to_create.append(signal)
-                dimension_scores[rule["dimension"]] += rule["weight"]
+                base_dimension_scores[rule["dimension"]] += rule["weight"]
 
     score_rows = (
         db.query(Score)
@@ -267,7 +399,7 @@ def recalculate_student_care_profile(
                     source="score",
                 )
             )
-            dimension_scores["study"] += 0.4
+            base_dimension_scores["study"] += 0.4
         elif avg_score < 80:
             signals_to_create.append(
                 StudentCareSignal(
@@ -280,7 +412,7 @@ def recalculate_student_care_profile(
                     source="score",
                 )
             )
-            dimension_scores["study"] += 0.22
+            base_dimension_scores["study"] += 0.22
 
         batch_map = defaultdict(list)
         for item in score_rows:
@@ -312,8 +444,8 @@ def recalculate_student_care_profile(
                         source="score",
                     )
                 )
-                dimension_scores["study"] += 0.18
-                dimension_scores["emotion"] += 0.12
+                base_dimension_scores["study"] += 0.18
+                base_dimension_scores["emotion"] += 0.12
                 trend = "up"
     else:
         signals_to_create.append(
@@ -327,7 +459,7 @@ def recalculate_student_care_profile(
                 source="data_gap",
             )
         )
-        dimension_scores["study"] += 0.0
+        base_dimension_scores["study"] += 0.0
 
     if student.class_id is None:
         signals_to_create.append(
@@ -341,18 +473,52 @@ def recalculate_student_care_profile(
                 source="student_status",
             )
         )
-        dimension_scores["social"] += 0.16
+        base_dimension_scores["social"] += 0.16
 
-    _append_attendance_signals(db, student, signals_to_create, dimension_scores)
-    _append_behavior_event_signals(db, student, signals_to_create, dimension_scores)
-    _append_care_observation_signals(db, student, signals_to_create, dimension_scores)
-    _append_family_contact_signals(db, student, signals_to_create, dimension_scores)
-    _append_assistant_summary_signals(db, student, signals_to_create, dimension_scores)
-    _append_manual_graph_relation_signals(db, student, signals_to_create, dimension_scores)
-    _append_graph_signals(db, student, signals_to_create, dimension_scores)
+    _append_attendance_signals(db, student, signals_to_create, base_dimension_scores)
+    _append_behavior_event_signals(db, student, signals_to_create, base_dimension_scores)
+    _append_care_observation_signals(db, student, signals_to_create, base_dimension_scores)
+    _append_family_contact_signals(db, student, signals_to_create, base_dimension_scores)
+    _append_assistant_summary_signals(db, student, signals_to_create, base_dimension_scores)
+    _append_manual_graph_relation_signals(db, student, signals_to_create, base_dimension_scores)
+    _append_graph_signals(db, student, signals_to_create, base_dimension_scores)
 
-    for key in DIMENSIONS:
-        dimension_scores[key] = _clamp_score(dimension_scores[key])
+    major_incident_context = _detect_major_incident(db, student)
+    _append_major_incident_signals(
+        student=student,
+        signals_to_create=signals_to_create,
+        base_dimension_scores=base_dimension_scores,
+        spillover_scores=spillover_scores,
+        incident_context=major_incident_context,
+    )
+
+    base_dimension_scores = {key: _clamp_score(value) for key, value in base_dimension_scores.items()}
+    spillover_scores = {key: _clamp_score(value) for key, value in spillover_scores.items()}
+    dimension_scores = {
+        key: _clamp_score(base_dimension_scores[key] + spillover_scores[key])
+        for key in DIMENSIONS
+    }
+
+    pre_bn_signal_dicts = [_signal_to_dict(item) for item in signals_to_create]
+    major_incident_bn = _build_major_incident_bn_analysis(
+        dimension_scores=dimension_scores,
+        signals=pre_bn_signal_dicts,
+        incident_context=major_incident_context,
+    )
+    _apply_major_incident_bn_spillover(
+        student=student,
+        signals_to_create=signals_to_create,
+        spillover_scores=spillover_scores,
+        dimension_scores=dimension_scores,
+        bn_analysis=major_incident_bn,
+    )
+    major_incident_context["bn_analysis"] = major_incident_bn
+
+    spillover_scores = {key: _clamp_score(value) for key, value in spillover_scores.items()}
+    dimension_scores = {
+        key: _clamp_score(base_dimension_scores[key] + spillover_scores[key])
+        for key in DIMENSIONS
+    }
 
     linear_scores = {key: value for key, value in dimension_scores.items()}
     signal_dicts = [_signal_to_dict(item) for item in signals_to_create]
@@ -363,6 +529,12 @@ def recalculate_student_care_profile(
         signals=signal_dicts,
         teacher_reviews=teacher_reviews,
         bayes_config=bayes_config,
+    )
+    incident_context = _finalize_major_incident_context(
+        incident_context=major_incident_context,
+        base_dimension_scores=base_dimension_scores,
+        spillover_scores=spillover_scores,
+        total_dimension_scores=dimension_scores,
     )
     emotion_bayes = bayes_results.get("emotion")
     if emotion_bayes and emotion_bayes.get("enabled"):
@@ -386,8 +558,20 @@ def recalculate_student_care_profile(
         + dimension_scores["behavior"] * OVERALL_WEIGHTS["behavior"]
     )
     risk_level = _risk_level(overall_risk)
+    major_incident_bn = _build_major_incident_bn_analysis(
+        dimension_scores=dimension_scores,
+        signals=signal_dicts,
+        incident_context=incident_context,
+    )
+    incident_context["bn_analysis"] = major_incident_bn
+    trend = _determine_profile_trend(
+        previous_profile=previous_profile,
+        overall_risk=overall_risk,
+        dimension_scores=dimension_scores,
+        incident_context=incident_context,
+    )
 
-    profile = db.query(StudentCareProfile).filter(StudentCareProfile.student_id == student.id).first()
+    profile = previous_profile
     if not profile:
         profile = StudentCareProfile(student_id=student.id, class_id=student.class_id)
         db.add(profile)
@@ -414,7 +598,7 @@ def recalculate_student_care_profile(
         .order_by(StudentCareSignal.signal_weight.desc(), StudentCareSignal.id.desc())
         .all()
     )
-    return profile, signals, bayes_results
+    return profile, signals, bayes_results, incident_context
 
 
 def _ensure_head_teacher_access(db: Session, current_user: User, student: Student) -> dict | None:
@@ -451,11 +635,16 @@ def _serialize_student(student: Student, db: Session) -> dict:
     }
 
 
-def _serialize_profile(profile: StudentCareProfile, bayes_results: dict | None = None) -> dict:
+def _serialize_profile(
+    profile: StudentCareProfile,
+    bayes_results: dict | None = None,
+    incident_context: dict | None = None,
+) -> dict:
     bayes_results = bayes_results or {}
+    incident_context = incident_context or {}
     safety_bayes = bayes_results.get("safety", {})
     social_bayes = bayes_results.get("social", {})
-    return {
+    payload = {
         "student_id": profile.student_id,
         "class_id": profile.class_id,
         "emotion_score": round(profile.emotion_score or 0, 4),
@@ -482,6 +671,20 @@ def _serialize_profile(profile: StudentCareProfile, bayes_results: dict | None =
         "bayes_results": bayes_results,
         "updated_at": str(profile.updated_at) if profile.updated_at else None,
     }
+    dimension_breakdown = incident_context.get("dimension_breakdown") or {}
+    for dimension in DIMENSIONS:
+        detail = dimension_breakdown.get(dimension, {})
+        payload[f"{dimension}_base_score"] = round(float(detail.get("base_score", 0)), 4)
+        payload[f"{dimension}_spillover_score"] = round(float(detail.get("spillover_score", 0)), 4)
+    payload["dimension_breakdown"] = dimension_breakdown
+    payload["major_incident_detected"] = bool(incident_context.get("major_incident_detected"))
+    payload["major_incident_types"] = incident_context.get("major_incident_types") or []
+    payload["major_incident_confidence"] = round(float(incident_context.get("major_incident_confidence", 0)), 4)
+    payload["major_incident_evidence"] = incident_context.get("major_incident_evidence") or []
+    payload["major_incident_impacted_dimensions"] = incident_context.get("impacted_dimensions") or []
+    payload["major_incident_propagation_details"] = incident_context.get("propagation_details") or []
+    payload["major_incident_bn"] = incident_context.get("bn_analysis") or {}
+    return payload
 
 
 def _serialize_signal(signal: StudentCareSignal) -> dict:
@@ -666,6 +869,493 @@ def _append_data_gap_signal(
             source="data_gap",
         )
     )
+
+
+def _detect_major_incident(db: Session, student: Student) -> dict:
+    incident_types: list[str] = []
+    evidence: list[str] = []
+    confidence_scores: list[float] = []
+
+    def register(incident_type: str, evidence_text: str, confidence: float) -> None:
+        if incident_type not in incident_types:
+            incident_types.append(incident_type)
+        if evidence_text and evidence_text not in evidence:
+            evidence.append(evidence_text)
+        confidence_scores.append(confidence)
+
+    behavior_records = (
+        db.query(StudentBehaviorEvent)
+        .filter(StudentBehaviorEvent.student_id == student.id)
+        .order_by(StudentBehaviorEvent.occurred_at.desc(), StudentBehaviorEvent.id.desc())
+        .all()
+    )
+    for item in behavior_records[:8]:
+        desc = str(item.event_desc or "")
+        if item.event_type == "bullying":
+            register(
+                "behavior_bullying",
+                f"行为事件记录疑似欺凌：{desc or item.event_type}",
+                0.92 if item.event_level == "high" else 0.82,
+            )
+        if item.event_type == "conflict" and item.event_level == "high":
+            register(
+                "behavior_conflict_high",
+                f"行为事件记录高等级冲突：{desc or item.event_type}",
+                0.84,
+            )
+        if item.event_type == "threat":
+            register(
+                "behavior_threat",
+                f"行为事件记录疑似威胁或恐吓：{desc or item.event_type}",
+                0.88 if item.event_level == "high" else 0.78,
+            )
+        if any(keyword in desc for keyword in MAJOR_INCIDENT_HINTS):
+            register(
+                "behavior_severe_text",
+                f"行为事件描述出现恶性事件关键词：{desc}",
+                0.78,
+            )
+
+    latest_summary = (
+        db.query(StudentAssistantSummary)
+        .filter(StudentAssistantSummary.student_id == student.id)
+        .order_by(StudentAssistantSummary.id.desc())
+        .first()
+    )
+    if latest_summary:
+        summary_text = str(latest_summary.summary_text or "")
+        if any(keyword in summary_text for keyword in MAJOR_INCIDENT_HINTS):
+            register(
+                "assistant_summary_severe_hint",
+                f"AI 摘要提示恶性事件：{summary_text[:80]}",
+                0.76,
+            )
+        signal_items = ((latest_summary.signals_json or {}).get("signals") or [])[:8]
+        for item in signal_items:
+            text = str(item.get("text") or "")
+            if any(keyword in text for keyword in MAJOR_INCIDENT_HINTS):
+                register(
+                    "assistant_signal_severe_hint",
+                    f"AI 结构化信号提示恶性事件：{text[:80]}",
+                    0.8,
+                )
+
+    graph_records = (
+        db.query(StudentCareGraphRelation)
+        .filter(StudentCareGraphRelation.student_id == student.id)
+        .order_by(
+            case((StudentCareGraphRelation.occurred_at.is_(None), 1), else_=0).asc(),
+            StudentCareGraphRelation.occurred_at.desc(),
+            StudentCareGraphRelation.id.desc(),
+        )
+        .all()
+    )
+    for item in graph_records[:8]:
+        if item.relation_type not in {"conflict", "bullying_link"}:
+            continue
+        if item.relation_level not in {"medium", "high"}:
+            continue
+        label = "冲突" if item.relation_type == "conflict" else "欺凌"
+        register(
+            f"graph_{item.relation_type}",
+            f"图谱关系存在{label}线索：{item.summary}",
+            0.74 if item.relation_level == "medium" else 0.84,
+        )
+
+    attendance_records = (
+        db.query(StudentAttendance)
+        .filter(StudentAttendance.student_id == student.id)
+        .order_by(StudentAttendance.date.desc(), StudentAttendance.id.desc())
+        .all()
+    )
+    attendance_anomaly_count = sum(
+        1 for item in attendance_records[:10]
+        if item.status in {"late", "absent", "early_leave"}
+    )
+    safety_behavior_hits = [
+        item for item in behavior_records[:8]
+        if item.event_type in SAFETY_EVENT_TYPES or any(keyword in str(item.event_desc or "") for keyword in MAJOR_INCIDENT_HINTS)
+    ]
+    if safety_behavior_hits and attendance_anomaly_count >= 2:
+        register(
+            "safety_attendance_cluster",
+            f"安全事件叠加近期异常出勤 {attendance_anomaly_count} 次",
+            0.72,
+        )
+
+    base_confidence = max(confidence_scores) if confidence_scores else 0.0
+    boosted_confidence = min(0.98, base_confidence + max(len(incident_types) - 1, 0) * 0.04)
+    return {
+        "major_incident_detected": bool(incident_types),
+        "major_incident_types": incident_types,
+        "major_incident_confidence": round(boosted_confidence, 4),
+        "major_incident_evidence": evidence[:6],
+    }
+
+
+def _append_major_incident_signals(
+    student: Student,
+    signals_to_create: list[StudentCareSignal],
+    base_dimension_scores: dict[str, float],
+    spillover_scores: dict[str, float],
+    incident_context: dict,
+) -> None:
+    if not incident_context.get("major_incident_detected"):
+        return
+
+    confidence = float(incident_context.get("major_incident_confidence") or 0)
+    safety_anchor = max(float(base_dimension_scores.get("safety") or 0), 0.35 + confidence * 0.15)
+    propagation_details = []
+
+    for rule in MAJOR_INCIDENT_PROPAGATION_RULES:
+        from_dimension = rule["from_dimension"]
+        to_dimension = rule["to_dimension"]
+        source_score = float(base_dimension_scores.get(from_dimension) or 0) + float(spillover_scores.get(from_dimension) or 0)
+        if from_dimension == "safety":
+            source_score = max(source_score, safety_anchor)
+        if source_score < rule["threshold"]:
+            continue
+
+        weight = round(source_score * rule["factor"] * (0.75 + confidence * 0.25), 4)
+        weight = min(rule["max_weight"], weight)
+        if weight <= 0:
+            continue
+        if weight < rule["min_weight"]:
+            weight = rule["min_weight"]
+
+        spillover_scores[to_dimension] += weight
+        propagation_details.append(
+            {
+                "from_dimension": from_dimension,
+                "to_dimension": to_dimension,
+                "signal_type": rule["signal_type"],
+                "signal_weight": round(weight, 4),
+            }
+        )
+        signals_to_create.append(
+            StudentCareSignal(
+                student_id=student.id,
+                class_id=student.class_id,
+                signal_type=rule["signal_type"],
+                dimension=to_dimension,
+                signal_text=rule["signal_text"],
+                signal_weight=round(weight, 4),
+                source="major_incident",
+            )
+        )
+
+    incident_context["propagation_details"] = propagation_details
+
+
+def _finalize_major_incident_context(
+    incident_context: dict,
+    base_dimension_scores: dict[str, float],
+    spillover_scores: dict[str, float],
+    total_dimension_scores: dict[str, float],
+) -> dict:
+    if not incident_context.get("major_incident_detected"):
+        return {
+            "major_incident_detected": False,
+            "major_incident_types": [],
+            "major_incident_confidence": 0.0,
+            "major_incident_evidence": [],
+            "propagation_details": [],
+            "bn_analysis": incident_context.get("bn_analysis") or {},
+            "impacted_dimensions": [],
+            "dimension_breakdown": {
+                key: {
+                    "base_score": round(float(base_dimension_scores.get(key) or 0), 4),
+                    "spillover_score": 0.0,
+                    "total_score": round(float(total_dimension_scores.get(key) or 0), 4),
+                }
+                for key in DIMENSIONS
+            },
+        }
+
+    impacted_dimensions = [
+        key for key in DIMENSIONS
+        if float(spillover_scores.get(key) or 0) > 0
+    ]
+    return {
+        "major_incident_detected": True,
+        "major_incident_types": incident_context.get("major_incident_types") or [],
+        "major_incident_confidence": round(float(incident_context.get("major_incident_confidence") or 0), 4),
+        "major_incident_evidence": incident_context.get("major_incident_evidence") or [],
+        "propagation_details": incident_context.get("propagation_details") or [],
+        "bn_analysis": incident_context.get("bn_analysis") or {},
+        "impacted_dimensions": impacted_dimensions,
+        "dimension_breakdown": {
+            key: {
+                "base_score": round(float(base_dimension_scores.get(key) or 0), 4),
+                "spillover_score": round(float(spillover_scores.get(key) or 0), 4),
+                "total_score": round(float(total_dimension_scores.get(key) or 0), 4),
+            }
+            for key in DIMENSIONS
+        },
+    }
+
+
+def _determine_profile_trend(
+    previous_profile: StudentCareProfile | None,
+    overall_risk: float,
+    dimension_scores: dict[str, float],
+    incident_context: dict,
+) -> str:
+    if incident_context.get("major_incident_detected"):
+        spillover_total = sum(
+            float(item.get("spillover_score") or 0)
+            for item in (incident_context.get("dimension_breakdown") or {}).values()
+        )
+        if spillover_total >= 0.15:
+            return "up"
+
+    if not previous_profile:
+        if overall_risk >= 0.3:
+            return "up"
+        return "steady"
+
+    risk_delta = round(float(overall_risk or 0) - float(previous_profile.overall_risk or 0), 4)
+    if risk_delta >= 0.08:
+        return "up"
+    if risk_delta <= -0.08:
+        return "down"
+
+    significant_dimensions = [
+        "emotion",
+        "social",
+        "safety",
+        "study",
+        "behavior",
+    ]
+    for dimension in significant_dimensions:
+        previous_score = float(getattr(previous_profile, f"{dimension}_score", 0) or 0)
+        current_score = float(dimension_scores.get(dimension) or 0)
+        if current_score - previous_score >= 0.18:
+            return "up"
+        if previous_score - current_score >= 0.18:
+            return "down"
+    return "steady"
+
+
+def _build_major_incident_bn_analysis(
+    dimension_scores: dict[str, float],
+    signals: list[dict],
+    incident_context: dict,
+) -> dict:
+    if not incident_context.get("major_incident_detected"):
+        return {
+            "enabled": False,
+            "detected": False,
+            "nodes": [],
+            "paths": [],
+            "suggested_spillover_scores": {},
+        }
+
+    node_results = {}
+    for node in MAJOR_INCIDENT_BN_NODE_CONFIG:
+        node_results[node] = _infer_major_incident_bn_node(
+            node=node,
+            dimension_scores=dimension_scores,
+            signals=signals,
+            incident_context=incident_context,
+            node_results=node_results,
+        )
+
+    suggested_spillover_scores = {}
+    for node, result in node_results.items():
+        dimension = result.get("dimension")
+        if dimension not in DIMENSIONS or dimension == "safety":
+            continue
+        impact = float(result.get("impact") or 0)
+        probability = float(result.get("probability") or 0)
+        suggestion = round(probability * impact * 0.24, 4)
+        if suggestion <= 0:
+            continue
+        suggested_spillover_scores[dimension] = min(0.24, suggestion)
+
+    path_items = [
+        {
+            "path_id": "safety-emotion-study",
+            "nodes": ["安全威胁持续", "情绪受损", "学习下滑"],
+            "path_probability": round(
+                float(node_results["safety_threat"]["probability"])
+                * 0.64
+                * float(node_results["emotion_impact"]["probability"])
+                * 0.46
+                * float(node_results["study_decline"]["probability"]),
+                4,
+            ),
+            "summary": "安全事件先冲击情绪，再通过注意力下降和学习承压影响学习表现。",
+        },
+        {
+            "path_id": "safety-social-study",
+            "nodes": ["安全威胁持续", "社交退缩", "学习下滑"],
+            "path_probability": round(
+                float(node_results["safety_threat"]["probability"])
+                * 0.42
+                * float(node_results["social_withdrawal"]["probability"])
+                * 0.32
+                * float(node_results["study_decline"]["probability"]),
+                4,
+            ),
+            "summary": "安全事件引发的回避同伴与班级脱离，可能进一步拖累学习投入。",
+        },
+        {
+            "path_id": "safety-behavior",
+            "nodes": ["安全威胁持续", "行为波动"],
+            "path_probability": round(
+                float(node_results["safety_threat"]["probability"])
+                * 0.5
+                * float(node_results["behavior_instability"]["probability"]),
+                4,
+            ),
+            "summary": "安全威胁若未解除，往往会先表现在迟到、回避参与或行为失稳上。",
+        },
+    ]
+    path_items.sort(key=lambda item: item["path_probability"], reverse=True)
+
+    return {
+        "enabled": True,
+        "detected": True,
+        "confidence": round(float(incident_context.get("major_incident_confidence") or 0), 4),
+        "nodes": [
+            {
+                "node": key,
+                "label": value["label"],
+                "dimension": value["dimension"],
+                "probability": value["probability"],
+                "base_prior": value["base_prior"],
+                "dynamic_prior": value["dynamic_prior"],
+                "impact": value["impact"],
+                "evidence": value["evidence"],
+            }
+            for key, value in node_results.items()
+        ],
+        "paths": path_items,
+        "suggested_spillover_scores": suggested_spillover_scores,
+    }
+
+
+def _apply_major_incident_bn_spillover(
+    student: Student,
+    signals_to_create: list[StudentCareSignal],
+    spillover_scores: dict[str, float],
+    dimension_scores: dict[str, float],
+    bn_analysis: dict,
+) -> None:
+    if not bn_analysis.get("enabled"):
+        return
+
+    suggested_scores = bn_analysis.get("suggested_spillover_scores") or {}
+    study_suggestion = round(float(suggested_scores.get("study") or 0), 4)
+    current_study_spillover = round(float(spillover_scores.get("study") or 0), 4)
+    additional_weight = round(study_suggestion - current_study_spillover, 4)
+    if additional_weight <= 0.02:
+        return
+
+    study_node = next(
+        (item for item in (bn_analysis.get("nodes") or []) if item.get("dimension") == "study"),
+        None,
+    )
+    if not study_node or float(study_node.get("probability") or 0) < 0.3:
+        return
+
+    spillover_scores["study"] += additional_weight
+    dimension_scores["study"] = _clamp_score(float(dimension_scores.get("study") or 0) + additional_weight)
+    signals_to_create.append(
+        StudentCareSignal(
+            student_id=student.id,
+            class_id=student.class_id,
+            signal_type="major_incident_bn_study_impact",
+            dimension="study",
+            signal_text="恶性事件传播贝叶斯子图判断：学习维度已出现次生受影响概率，建议作为前瞻风险纳入观察。",
+            signal_weight=additional_weight,
+            source="major_incident_bn",
+        )
+    )
+
+
+def _infer_major_incident_bn_node(
+    node: str,
+    dimension_scores: dict[str, float],
+    signals: list[dict],
+    incident_context: dict,
+    node_results: dict[str, dict],
+) -> dict:
+    config = MAJOR_INCIDENT_BN_NODE_CONFIG[node]
+    dimension = config["dimension"]
+    dimension_score = float(dimension_scores.get(dimension) or 0)
+    parent_signal = 0.0
+    if config["parents"]:
+        parent_values = []
+        for parent_node, edge_weight in config["parents"]:
+            parent_probability = float((node_results.get(parent_node) or {}).get("probability") or 0)
+            parent_values.append(parent_probability * edge_weight)
+        if parent_values:
+            parent_signal = 1 - prod(max(0.01, 1 - value) for value in parent_values)
+
+    base_prior = float(config["base_prior"])
+    dynamic_prior = base_prior + (1 - base_prior) * max(
+        dimension_score * float(config["profile_weight"]),
+        parent_signal * 0.5,
+    )
+    dynamic_prior = _clamp_score(dynamic_prior)
+
+    matches = []
+    for rule in MAJOR_INCIDENT_BN_EVIDENCE_RULES.get(node, []):
+        matched_signal = _match_major_incident_bn_signal(rule, signals)
+        if not matched_signal:
+            continue
+        matches.append(
+            {
+                "label": rule["label"],
+                "lr": float(rule["lr"]),
+                "signal_text": matched_signal.get("signal_text") or "",
+                "source": matched_signal.get("source") or "",
+            }
+        )
+
+    likelihood_ratios = [item["lr"] for item in matches]
+    adjusted_lrs = apply_diminishing_returns(likelihood_ratios, method="sqrt") if likelihood_ratios else []
+    odds = dynamic_prior / max(1 - dynamic_prior, 0.001)
+    for lr in adjusted_lrs:
+        odds *= max(float(lr), 0.05)
+    probability = _clamp_score(odds / (1 + odds))
+    return {
+        "label": config["label"],
+        "dimension": dimension,
+        "base_prior": round(base_prior, 4),
+        "dynamic_prior": round(dynamic_prior, 4),
+        "probability": round(probability, 4),
+        "impact": round(float(config["impact"]), 4),
+        "evidence": [
+            {
+                "label": item["label"],
+                "lr": round(item["lr"], 4),
+                "signal_text": item["signal_text"],
+                "source": item["source"],
+            }
+            for item in matches[:4]
+        ],
+    }
+
+
+def _match_major_incident_bn_signal(rule: dict, signals: list[dict]) -> dict | None:
+    prefixes = tuple(rule.get("signal_type_prefixes") or ())
+    keywords = tuple(rule.get("keywords") or ())
+    for item in signals:
+        if rule.get("source") and item.get("source") != rule["source"]:
+            continue
+        if rule.get("dimension") and item.get("dimension") != rule["dimension"]:
+            continue
+        signal_type = str(item.get("signal_type") or "")
+        signal_text = str(item.get("signal_text") or "")
+        if prefixes and not any(signal_type.startswith(prefix) for prefix in prefixes):
+            continue
+        if keywords and not any(keyword in signal_text for keyword in keywords):
+            continue
+        return item
+    return None
 
 
 def _risk_level(score: float) -> str:

@@ -6,8 +6,8 @@ from sqlalchemy.orm import Session
 
 from api.deps import get_db, require_role
 from database.models.user import User
-from schemas.placement import PlacementConfirmRequest, PlacementValidateRequest
-from services import placement_service
+from schemas.placement import PlacementConfirmRequest, PlacementGenerateRequest, PlacementValidateRequest
+from services import placement_service, profile_placement_service
 
 router = APIRouter(prefix="/api/placement", tags=["校务分班管理"])
 
@@ -19,6 +19,21 @@ def get_placement_overview(
     current_user: User = Depends(require_role("admin")),
 ):
     return placement_service.get_overview(db=db, current_user=current_user, grade=grade)
+
+
+@router.post("/generate-with-profile")
+def generate_placement_with_profile(
+    data: PlacementGenerateRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role("admin")),
+):
+    return profile_placement_service.generate_with_profile(
+        db=db,
+        current_user=current_user,
+        grade=data.grade,
+        target_classes=data.target_classes,
+        constraints=data.constraints,
+    )
 
 
 @router.post("/validate")

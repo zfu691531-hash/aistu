@@ -14,6 +14,7 @@ from database.models.class_ import Class
 from database.models.score import Score
 from database.models.user import User
 from services.ai.base import ai_client, save_history
+from services.ai.student_profile_context import build_student_profile_context
 from core.response import success_response, error_response
 from utils.logger import logger
 
@@ -112,15 +113,19 @@ async def _generate_single(
     if scores:
         score_list = [f"{s.subject}:{float(s.score)}分" for s in scores[-5:]]  # 最近5条
         score_info = "近期成绩：" + "、".join(score_list)
+
+    profile_context = build_student_profile_context(db, student)
     
     # 构建提示词
     system_prompt = f"""你是一位经验丰富、善于发现学生闪光点的班主任。
-请根据学生信息撰写一份{request.style}期末评语。
+请根据学生信息、近期成绩和学生状态摘要撰写一份{request.style}期末评语。
 要求：
 1. 语言亲切自然，避免套话
 2. 突出学生个性特点
-3. 肯定优点，委婉指出不足
-4. 字数150-200字"""
+3. 肯定优点，委婉指出不足，并给出简短、温和的成长建议
+4. 如果学生近期状态有波动，请转化成支持性表达，不要直接提及画像分数、风险等级或敏感标签
+5. 可适度加入老师视角的关怀感和陪伴感
+6. 字数150-220字"""
 
     user_prompt = f"""学生信息：
 - 姓名：{student.name}
@@ -130,6 +135,9 @@ async def _generate_single(
 - 标签：{student.tags or "无"}
 - {score_info}
 - 学期：{request.semester}
+
+学生关怀状态摘要：
+{profile_context["prompt_block"]}
 
 请为该学生撰写期末评语。"""
 

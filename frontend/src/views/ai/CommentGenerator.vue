@@ -5,7 +5,7 @@
         <template #header>
           <div>
             <div class="card-title">期末评语生成</div>
-            <div class="card-desc">支持单个学生精细生成，也支持按班级批量生成。</div>
+            <div class="card-desc">支持单个学生精细生成，也支持按班级批量生成。系统会参考学生画像，把评语写得更贴近状态，但只使用温和表达。</div>
           </div>
         </template>
 

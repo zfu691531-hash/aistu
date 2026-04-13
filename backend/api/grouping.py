@@ -6,8 +6,8 @@ from sqlalchemy.orm import Session
 
 from api.deps import get_current_user, get_db, require_role
 from database.models.user import User
-from schemas.grouping import GroupSchemeCreate, GroupSchemeUpdate
-from services import grouping_service
+from schemas.grouping import GroupGenerateRequest, GroupSchemeCreate, GroupSchemeUpdate
+from services import grouping_service, profile_grouping_service
 
 router = APIRouter(prefix="/api/grouping", tags=["教师分组管理"])
 
@@ -36,6 +36,21 @@ def get_group_scheme_detail(
     current_user: User = Depends(require_role("teacher", "admin")),
 ):
     return grouping_service.get_scheme(db=db, current_user=current_user, scheme_id=scheme_id)
+
+
+@router.post("/generate-with-profile")
+def generate_group_scheme_with_profile(
+    data: GroupGenerateRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role("teacher", "admin")),
+):
+    return profile_grouping_service.generate_with_profile(
+        db=db,
+        current_user=current_user,
+        class_id=data.class_id,
+        group_count=data.group_count,
+        constraints=data.constraints,
+    )
 
 
 @router.post("/schemes")

@@ -22,7 +22,7 @@ const routes = [
         path: '',
         name: '403',
         component: () => import('@/views/error/403.vue'),
-        meta: { title: '无权限', hidden: true }
+        meta: { title: 'Forbidden', hidden: true }
       }
     ]
   },
@@ -34,7 +34,7 @@ const routes = [
         path: '',
         name: '404',
         component: () => import('@/views/error/404.vue'),
-        meta: { title: '页面不存在', hidden: true }
+        meta: { title: 'Not Found', hidden: true }
       }
     ]
   },
@@ -66,16 +66,6 @@ const routes = [
         }
       },
       {
-        path: 'students/report',
-        name: 'StudentCareReport',
-        component: () => import('@/views/student/StudentCareReport.vue'),
-        meta: {
-          title: '关怀研判报表',
-          icon: 'DataAnalysis',
-          requiredRoles: ['teacher', 'admin']
-        }
-      },
-      {
         path: 'students/evaluation',
         name: 'StudentCareEvaluation',
         component: () => import('@/views/student/StudentCareEvaluationPage.vue'),
@@ -100,7 +90,7 @@ const routes = [
         name: 'StudentCareBayesRules',
         component: () => import('@/views/student/StudentCareBayesRulePage.vue'),
         meta: {
-          title: '贝叶斯参数管理',
+          title: 'Bayes Rules',
           icon: 'CollectionTag',
           requiredRoles: ['admin']
         }
@@ -220,6 +210,16 @@ const routes = [
             }
           },
           {
+            path: 'teacher-rule',
+            name: 'TeacherRuleAssistant',
+            component: () => import('@/views/ai/TeacherRuleAssistant.vue'),
+            meta: {
+              title: '教师版校规助手',
+              icon: 'QuestionFilled',
+              requiredRoles: ['teacher', 'admin']
+            }
+          },
+          {
             path: 'diagnosis',
             name: 'ScoreDiagnosis',
             component: () => import('@/views/ai/ScoreDiagnosis.vue'),
@@ -289,3 +289,5 @@ const routes = [
 ]
 
 export default routes
+
+

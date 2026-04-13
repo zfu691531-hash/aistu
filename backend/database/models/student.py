@@ -12,6 +12,7 @@ class Student(Base, TimestampMixin):
     __table_args__ = (
         Index("idx_class_id", "class_id"),
         Index("idx_grade", "grade"),
+        Index("idx_user_id", "user_id", unique=True),
     )
 
     id: Mapped[int] = mapped_column(
@@ -19,6 +20,9 @@ class Student(Base, TimestampMixin):
     )
     student_no: Mapped[str] = mapped_column(
         String(20), unique=True, comment="学号"
+    )
+    user_id: Mapped[int | None] = mapped_column(
+        BigInteger, comment="关联学生用户ID"
     )
     name: Mapped[str] = mapped_column(
         String(50), comment="姓名"

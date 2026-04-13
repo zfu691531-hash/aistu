@@ -5,7 +5,7 @@
         <template #header>
           <div>
             <div class="card-title">成绩波动诊断</div>
-            <div class="card-desc">结合历史成绩趋势，生成更像老师视角的分析建议。</div>
+            <div class="card-desc">结合历史成绩趋势和学生画像状态，生成更个性化、带关怀建议的分析结果。</div>
           </div>
         </template>
 
@@ -26,6 +26,14 @@
         </el-form>
 
         <el-divider />
+
+        <el-alert
+          type="info"
+          :closable="false"
+          show-icon
+          title="诊断会参考学生画像状态，但输出只采用温和、支持性的表达，不直接展示风险标签。"
+          style="margin-bottom: 16px"
+        />
 
         <el-table v-if="result?.score_data?.length" :data="result.score_data.slice(-6)" size="small" border>
           <el-table-column prop="exam_batch" label="批次" min-width="120" />

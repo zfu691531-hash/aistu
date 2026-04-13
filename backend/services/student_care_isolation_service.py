@@ -1,5 +1,11 @@
 # -*- coding: utf-8 -*-
-"""Standalone Bayesian-network-style plugin for social isolation alerts."""
+"""Standalone Bayesian-network-style plugin for social isolation alerts.
+
+改进版本 v2.0:
+- 与贝叶斯辅助层协同：使用动态先验
+- 使用共享的边际递减函数处理证据相关性
+- 网络输出可回传至辅助层形成闭环
+"""
 
 from __future__ import annotations
 
@@ -15,10 +21,20 @@ from database.models.student_care_profile import StudentCareProfile
 from database.models.student_care_signal import StudentCareSignal
 from database.models.user import User
 from services import student_care_service
+from services.student_care_bayes_service import apply_diminishing_returns
 from services.student_care_schema_guard import ensure_student_care_schema
 
 
 ISOLATION_SCENE = "social_isolation"
+
+# 节点到维度的映射：用于从贝叶斯辅助层获取动态先验
+NODE_TO_DIMENSION = {
+    "peer_disconnect": "social",        # 同伴连接 → 社交维度
+    "emotional_withdrawal": "emotion",  # 情绪退缩 → 情绪维度
+    "family_support_gap": "family",     # 家庭支持 → 家庭维度
+    "safety_threat": "safety",          # 安全威胁 → 安全维度
+    "behavior_retreat": "behavior",     # 行为退避 → 行为维度
+}
 
 ROOT_CAUSE_CONFIG = {
     "peer_disconnect": {
@@ -273,7 +289,7 @@ def _ensure_profile_and_signals(db: Session, student: Student) -> tuple[StudentC
     )
     if profile and signals:
         return profile, signals
-    profile, signals, _ = student_care_service.recalculate_student_care_profile(db, student)
+    profile, signals, _, _ = student_care_service.recalculate_student_care_profile(db, student)
     return profile, signals
 
 
@@ -290,6 +306,21 @@ def _signal_to_dict(item: StudentCareSignal) -> dict:
 
 
 def _infer_root_causes(profile: StudentCareProfile, signals: list[dict], agent_context: dict | None = None) -> list[dict]:
+    """
+    推断根本原因节点概率。
+    
+    改进v2.0:
+    - 使用动态先验（融合贝叶斯辅助层的输出）
+    - 使用边际递减处理证据相关性
+    
+    Args:
+        profile: 学生关怀画像（包含贝叶斯辅助层的维度分数）
+        signals: 信号列表
+        agent_context: 智能体上下文
+    
+    Returns:
+        根本原因列表（按贡献度排序，最多4个）
+    """
     result = []
     for node in DIRECT_CAUSE_KEYS:
         config = ROOT_CAUSE_CONFIG[node]
@@ -298,12 +329,24 @@ def _infer_root_causes(profile: StudentCareProfile, signals: list[dict], agent_c
             matched, evidence = _match_rule(rule, profile, signals, agent_context)
             if matched:
                 matches.append({"rule": rule, "evidence": evidence})
-        probability = _calculate_probability(config["prior"], [item["rule"]["lr"] for item in matches])
+        
+        # 改进：使用动态先验
+        base_prior = config["prior"]
+        dynamic_prior = _calculate_dynamic_prior_for_node(base_prior, profile, node)
+        
+        # 收集似然比
+        likelihood_ratios = [item["rule"]["lr"] for item in matches]
+        
+        # 改进：使用边际递减计算后验
+        probability = _calculate_probability(dynamic_prior, likelihood_ratios, use_diminishing=True)
+        
         contribution = _clamp_probability(probability * config["impact"])
         result.append(
             {
                 "node": node,
                 "label": config["label"],
+                "base_prior": round(base_prior, 4),
+                "dynamic_prior": round(dynamic_prior, 4),
                 "probability": probability,
                 "impact": round(config["impact"], 4),
                 "contribution": contribution,
@@ -381,16 +424,66 @@ def _match_rule(rule: dict, profile: StudentCareProfile, signals: list[dict], ag
     return False, {}
 
 
-def _calculate_probability(prior: float, likelihood_ratios: list[float]) -> float:
+def _calculate_probability(prior: float, likelihood_ratios: list[float], use_diminishing: bool = True) -> float:
+    """
+    计算贝叶斯后验概率。
+    
+    改进v2.0:
+    - 使用共享的边际递减函数处理证据相关性
+    
+    Args:
+        prior: 先验概率
+        likelihood_ratios: 似然比列表
+        use_diminishing: 是否使用边际递减（默认True）
+    
+    Returns:
+        后验概率
+    """
     if prior <= 0:
         return 0.0
     if prior >= 1:
         return 1.0
+    
+    # 应用边际递减
+    if use_diminishing and likelihood_ratios:
+        adjusted_lrs = apply_diminishing_returns(likelihood_ratios, method="sqrt")
+    else:
+        adjusted_lrs = likelihood_ratios
+    
     odds = prior / (1 - prior)
-    for lr in likelihood_ratios:
+    for lr in adjusted_lrs:
         odds *= max(float(lr), 0.05)
     posterior = odds / (1 + odds)
     return _clamp_probability(posterior)
+
+
+def _calculate_dynamic_prior_for_node(base_prior: float, profile: StudentCareProfile, node: str) -> float:
+    """
+    为网络节点计算动态先验。
+    
+    改进v2.0:
+    - 从贝叶斯辅助层的输出（画像分数）获取动态信息
+    - 公式: dynamic_prior = base_prior + (1 - base_prior) * dimension_score * 0.3
+    
+    Args:
+        base_prior: 基准先验概率
+        profile: 学生关怀画像（包含贝叶斯辅助层的输出）
+        node: 网络节点名称
+    
+    Returns:
+        动态先验概率
+    """
+    dimension = NODE_TO_DIMENSION.get(node)
+    if not dimension or not profile:
+        return base_prior
+    
+    # 从画像获取维度分数
+    score_attr = f"{dimension}_score"
+    dimension_score = float(getattr(profile, score_attr, 0) or 0)
+    
+    # 计算动态先验
+    dynamic_prior = base_prior + (1 - base_prior) * dimension_score * 0.3
+    return _clamp_probability(dynamic_prior)
 
 
 def _derive_social_withdrawal_probability(node_probabilities: dict[str, float]) -> float:

@@ -24,6 +24,12 @@ class GroupSchemeCreate(BaseModel):
     assignments: List[GroupStudentAssign] = Field(default_factory=list, description="分组结果")
 
 
+class GroupGenerateRequest(BaseModel):
+    class_id: int = Field(..., description="班级 ID")
+    group_count: int = Field(..., ge=1, description="分组数量")
+    constraints: Optional[dict] = Field(None, description="生成约束配置")
+
+
 class GroupSchemeUpdate(BaseModel):
     scheme_name: Optional[str] = Field(None, description="方案名称")
     group_count: Optional[int] = Field(None, ge=1, description="分组数量")

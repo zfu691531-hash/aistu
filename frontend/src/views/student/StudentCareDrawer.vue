@@ -17,7 +17,7 @@
           <el-button size="small" @click="$emit('recalculate')">手动重算</el-button>
           <el-button size="small" type="primary" @click="$emit('agent-eval')">智能研判</el-button>
           <el-tag :type="riskTagType(profile?.risk_level)">
-            {{ riskLabel(profile?.risk_level) }}
+            {{ displayRiskLabel(profile?.risk_level, { majorIncident: majorIncidentDetected, overall: true }) }}
           </el-tag>
         </div>
       </div>
@@ -73,31 +73,207 @@
             <div class="summary-updated">更新时间：{{ profile.updated_at || '-' }}</div>
           </div>
         </div>
+        <div class="overview-strip">
+          <div class="overview-card">
+            <div class="overview-card-title">当前态势</div>
+            <div class="overview-chip-list">
+              <span class="quality-chip" :class="majorIncidentDetected ? 'quality-chip--incident' : 'quality-chip--neutral'">
+                {{ majorIncidentDetected ? '恶性事件后阶段' : '常规观察阶段' }}
+              </span>
+              <span v-for="item in overviewHighlights" :key="item.dimension" class="quality-chip quality-chip--focus">
+                {{ item.label }} {{ formatPercent(item.score) }}
+              </span>
+            </div>
+          </div>
+        </div>
 
-        <div class="dimension-list">
-          <div v-for="item in dimensionItems" :key="item.key" class="dimension-item">
-            <div class="dimension-head">
-              <span>{{ item.label }}</span>
-              <span>{{ Math.round(item.score * 100) }}%</span>
-            </div>
-            <div class="dimension-bar">
-              <div
-                class="dimension-fill"
-                :class="`risk-${scoreLevel(item.score)}`"
-                :style="{ width: `${Math.round(item.score * 100)}%` }"
-              />
-            </div>
-            <div v-if="item.reasons.length" class="dimension-reasons">
-              <div
-                v-for="reason in item.reasons"
-                :key="`${item.key}-${reason.id}`"
-                class="dimension-reason"
-              >
-                {{ reason.signal_text }}
+        <div v-if="majorIncidentDetected" class="signal-card incident-card">
+          <button type="button" class="section-toggle" @click="toggleSection('incident')">
+            <span class="section-title">恶性事件传导</span>
+            <span class="section-toggle-text">{{ isSectionOpen('incident') ? '收起' : '展开' }}</span>
+          </button>
+          <div v-show="isSectionOpen('incident')" class="incident-body">
+            <div class="incident-summary-card">
+              <div class="incident-summary-main">
+                <div class="incident-summary-title">当前已命中恶性事件后阶段</div>
+                <div class="incident-summary-text">
+                  系统识别到 {{ majorIncidentTypeText }}，置信度 {{ formatPercent(profile.major_incident_confidence || 0) }}。
+                </div>
+                <div v-if="majorIncidentEvidence.length" class="incident-evidence-list">
+                  <div v-for="(item, index) in majorIncidentEvidence" :key="`incident-evidence-${index}`" class="incident-evidence-item">
+                    {{ item }}
+                  </div>
+                </div>
+              </div>
+              <div class="incident-summary-side">
+                <el-tag type="danger">恶性事件</el-tag>
+                <div class="incident-summary-caption">以下维度包含事件后次生风险</div>
               </div>
             </div>
-            <div v-else class="dimension-empty">
-              当前没有明显风险依据
+
+            <div v-if="incidentImpactItems.length" class="incident-impact-grid">
+              <div v-for="item in incidentImpactItems" :key="item.dimension" class="incident-impact-card">
+                <div class="incident-impact-head">
+                  <span>{{ item.label }}</span>
+                  <div class="incident-impact-side">
+                    <el-tag v-if="item.isBnSuggested" size="small" type="warning">前瞻预警</el-tag>
+                    <span>{{ formatSignedScore(item.spilloverScore, 2) }}</span>
+                  </div>
+                </div>
+                <div class="incident-impact-metrics">
+                  <div class="incident-impact-metric">
+                    <span>原始风险</span>
+                    <strong>{{ formatPercent(item.baseScore) }}</strong>
+                  </div>
+                  <div class="incident-impact-metric">
+                    <span>传导影响</span>
+                    <strong>{{ formatPercent(item.spilloverScore) }}</strong>
+                  </div>
+                  <div class="incident-impact-metric">
+                    <span>当前结果</span>
+                    <strong>{{ formatPercent(item.totalScore) }}</strong>
+                  </div>
+                </div>
+                <div v-if="item.note" class="incident-impact-note">{{ item.note }}</div>
+              </div>
+            </div>
+
+            <div v-if="majorIncidentPropagationSignals.length" class="incident-propagation-list">
+              <div class="incident-subtitle">传导信号</div>
+              <div v-for="item in majorIncidentPropagationSignals" :key="item.id" class="incident-propagation-item">
+                <div class="incident-propagation-head">
+                  <span>{{ dimensionLabel(item.dimension) }}</span>
+                  <span>{{ formatSignedScore(item.signal_weight, 2) }}</span>
+                </div>
+                <div class="incident-propagation-text">{{ item.signal_text }}</div>
+              </div>
+            </div>
+
+            <div v-if="majorIncidentBnEnabled" class="incident-bn-section">
+              <div class="incident-subtitle">贝叶斯传播判断</div>
+              <div class="incident-bn-summary">
+                这部分主要用于判断在恶性事件后，哪条次生传播路径当前更可能发生。像学习维度这类 BN 建议值，默认按前瞻风险展示，提醒老师先核查，不直接等同于已发生学业异常。
+              </div>
+
+              <div v-if="majorIncidentBnNodeItems.length" class="incident-bn-node-grid">
+                <div v-for="item in majorIncidentBnNodeItems" :key="item.node" class="incident-bn-node-card">
+                  <div class="incident-bn-node-head">
+                    <span>{{ item.label }}</span>
+                    <strong>{{ formatPercent(item.probability) }}</strong>
+                  </div>
+                  <div class="incident-bn-node-meta">
+                    先验 {{ formatPercent(item.dynamic_prior) }} · 影响度 {{ formatPercent(item.impact) }}
+                  </div>
+                  <div v-if="item.evidence?.length" class="incident-bn-node-evidence">
+                    <div
+                      v-for="(evidence, index) in item.evidence.slice(0, 2)"
+                      :key="`${item.node}-evidence-${index}`"
+                      class="incident-bn-node-evidence-item"
+                    >
+                      {{ evidence.label }}：{{ evidence.signal_text || '-' }}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div v-if="majorIncidentBnPathItems.length" class="incident-bn-path-list">
+                <div v-for="item in majorIncidentBnPathItems" :key="item.path_id" class="incident-bn-path-card">
+                  <div class="incident-bn-path-head">
+                    <span>{{ item.nodes.join(' → ') }}</span>
+                    <strong>{{ formatPercent(item.path_probability) }}</strong>
+                  </div>
+                  <div class="incident-bn-path-text">{{ item.summary }}</div>
+                </div>
+              </div>
+
+              <div v-if="majorIncidentBnSuggestedItems.length" class="incident-bn-suggest-grid">
+                <div v-for="item in majorIncidentBnSuggestedItems" :key="item.dimension" class="incident-bn-suggest-card">
+                  <div class="incident-bn-suggest-main">
+                    <span>{{ item.label }}</span>
+                    <strong>{{ formatPercent(item.score) }}</strong>
+                  </div>
+                  <div class="incident-bn-suggest-note">{{ item.note }}</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="signal-card">
+          <button type="button" class="section-toggle" @click="toggleSection('dimensions')">
+            <span class="section-title">维度概览</span>
+            <span class="section-toggle-text">{{ isSectionOpen('dimensions') ? '收起' : '展开' }}</span>
+          </button>
+          <div v-show="isSectionOpen('dimensions')" class="dimension-section">
+            <div class="dimension-section-title">重点维度</div>
+            <div class="dimension-list">
+              <div v-for="item in focusDimensionItems" :key="item.key" class="dimension-item">
+                <div class="dimension-head">
+                  <span>{{ item.label }}</span>
+                  <span>{{ Math.round(item.score * 100) }}%</span>
+                </div>
+                <div class="dimension-bar">
+                  <div
+                    class="dimension-fill"
+                    :class="`risk-${scoreLevel(item.score)}`"
+                    :style="{ width: `${Math.round(item.score * 100)}%` }"
+                  />
+                </div>
+                <div v-if="item.spilloverScore > 0" class="dimension-split">
+                  <span>原始 {{ formatPercent(item.baseScore) }}</span>
+                  <span>传导 {{ formatPercent(item.spilloverScore) }}</span>
+                </div>
+                <div v-if="item.reasons.length" class="dimension-reasons">
+                  <div
+                    v-for="reason in item.reasons"
+                    :key="`${item.key}-${reason.id}`"
+                    class="dimension-reason"
+                  >
+                    {{ reason.signal_text }}
+                  </div>
+                </div>
+                <div v-else class="dimension-empty">
+                  当前没有明显风险依据
+                </div>
+              </div>
+            </div>
+
+            <div v-if="secondaryDimensionItems.length" class="dimension-secondary">
+              <button type="button" class="subtle-toggle" @click="toggleSection('dimensionsSecondary')">
+                <span>其余维度 {{ secondaryDimensionItems.length }} 项</span>
+                <span>{{ isSectionOpen('dimensionsSecondary') ? '收起' : '展开' }}</span>
+              </button>
+              <div v-show="isSectionOpen('dimensionsSecondary')" class="dimension-list dimension-list--secondary">
+                <div v-for="item in secondaryDimensionItems" :key="item.key" class="dimension-item">
+                  <div class="dimension-head">
+                    <span>{{ item.label }}</span>
+                    <span>{{ Math.round(item.score * 100) }}%</span>
+                  </div>
+                  <div class="dimension-bar">
+                    <div
+                      class="dimension-fill"
+                      :class="`risk-${scoreLevel(item.score)}`"
+                      :style="{ width: `${Math.round(item.score * 100)}%` }"
+                    />
+                  </div>
+                  <div v-if="item.spilloverScore > 0" class="dimension-split">
+                    <span>原始 {{ formatPercent(item.baseScore) }}</span>
+                    <span>传导 {{ formatPercent(item.spilloverScore) }}</span>
+                  </div>
+                  <div v-if="item.reasons.length" class="dimension-reasons">
+                    <div
+                      v-for="reason in item.reasons.slice(0, 2)"
+                      :key="`${item.key}-${reason.id}`"
+                      class="dimension-reason"
+                    >
+                      {{ reason.signal_text }}
+                    </div>
+                  </div>
+                  <div v-else class="dimension-empty">
+                    当前没有明显风险依据
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -608,7 +784,7 @@
                 {{ Math.round((agentResult.result?.overall_score || 0) * 100) }}%
               </div>
               <div class="agent-level">
-                {{ riskLabel(agentResult.result?.overall_level) }}
+                {{ displayRiskLabel(agentResult.result?.overall_level, { majorIncident: majorIncidentDetected, overall: true }) }}
               </div>
               <div class="agent-meta">
                 模型：{{ agentResult.model_name || '-' }} · 超时：{{ agentResult.timeout_seconds }}s
@@ -629,6 +805,18 @@
               </div>
               <div v-if="agentResult.error_msg" class="agent-error">
                 {{ humanizeAgentError(agentResult.error_msg) }}
+              </div>
+            </div>
+
+            <div v-if="agentMajorIncidentMode" class="agent-incident-card">
+              <div class="agent-incident-title">恶性事件后核查模式</div>
+              <div class="agent-incident-text">
+                {{ agentResult.result?.major_incident_summary || '当前属于恶性事件后阶段，应优先核实安全事实与次生影响。' }}
+              </div>
+              <div v-if="agentSecondaryImpacts.length" class="quality-chip-list">
+                <span v-for="item in agentSecondaryImpacts" :key="`agent-secondary-${item.dimension}`" class="quality-chip quality-chip--incident">
+                  {{ item.label }} · 传导 {{ formatPercent(item.spillover_score || 0) }}
+                </span>
               </div>
             </div>
 
@@ -708,6 +896,42 @@
                 {{ index + 1 }}. {{ item }}
               </div>
             </div>
+
+            <div v-if="agentResult.result?.explanation_highlights?.length" class="agent-actions">
+              <div class="agent-actions-title">解释强化</div>
+              <div
+                v-for="(item, index) in agentResult.result.explanation_highlights"
+                :key="`${index}-${item}`"
+                class="agent-action"
+              >
+                {{ index + 1 }}. {{ item }}
+              </div>
+            </div>
+
+            <div v-if="agentResult.result?.review_suggestions?.length" class="agent-actions">
+              <div class="agent-actions-title">老师核查建议</div>
+              <div
+                v-for="(item, index) in agentResult.result.review_suggestions"
+                :key="`${item.dimension}-${index}`"
+                class="agent-review-card"
+              >
+                <div class="agent-review-head">
+                  <span>{{ item.title }}</span>
+                  <el-tag size="small" :type="item.priority === 'high' ? 'danger' : 'warning'">
+                    {{ item.priority === 'high' ? '高优先级' : '中优先级' }}
+                  </el-tag>
+                </div>
+                <div v-if="item.checks?.length" class="agent-review-list">
+                  <div
+                    v-for="(check, checkIndex) in item.checks"
+                    :key="`${item.dimension}-${checkIndex}`"
+                    class="agent-review-item"
+                  >
+                    {{ checkIndex + 1 }}. {{ check }}
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
           </div>
         </div>
@@ -732,9 +956,29 @@
                       </el-tag>
                     </div>
                   </div>
-                  <div class="expert-summary">{{ buildDimensionSummaryLead(item.result || { dimension: item.dimension }) }}</div>
-                  <div v-if="buildDimensionSummaryDetail(item.result || {})" class="expert-detail">
-                    {{ buildDimensionSummaryDetail(item.result || {}) }}
+                  <div class="expert-summary">{{ item.view.lead }}</div>
+                  <div v-if="item.view.detail" class="expert-detail">
+                    {{ item.view.detail }}
+                  </div>
+                  <div class="expert-consistency-grid">
+                    <div class="expert-consistency-card">
+                      <span class="expert-consistency-label">解释基调</span>
+                      <strong>{{ item.view.tone }}</strong>
+                    </div>
+                    <div class="expert-consistency-card">
+                      <span class="expert-consistency-label">证据状态</span>
+                      <strong>{{ item.view.evidenceStatus }}</strong>
+                    </div>
+                    <div class="expert-consistency-card">
+                      <span class="expert-consistency-label">核查重点</span>
+                      <strong>{{ item.view.focus }}</strong>
+                    </div>
+                  </div>
+                  <div v-if="item.view.primaryEvidence" class="expert-key-point">
+                    核心依据：{{ item.view.primaryEvidence }}
+                  </div>
+                  <div v-if="item.view.consistencyHint" class="expert-key-point expert-key-point--muted">
+                    {{ item.view.consistencyHint }}
                   </div>
                   <ul v-if="item.result?.evidence?.length" class="expert-evidence">
                     <li v-for="(row, index) in item.result.evidence" :key="`${item.dimension}-${index}`" class="evidence-item">
@@ -807,7 +1051,7 @@
               <el-table-column prop="model_name" label="模型" min-width="120" />
               <el-table-column label="风险等级" width="110">
                 <template #default="{ row }">
-                  {{ riskLabel(row.result?.overall_level) }}
+                  {{ displayRiskLabel(row.result?.overall_level, { majorIncident: Boolean(row.result?.major_incident_mode), overall: true }) }}
                 </template>
               </el-table-column>
               <el-table-column label="综合分" width="90">
@@ -1234,15 +1478,18 @@ const props = defineProps({
 })
 
 const sectionState = ref({
-  bayes: true,
-  isolation: true,
-  graph: true,
-  dataQuality: true,
+  incident: true,
+  dimensions: true,
+  dimensionsSecondary: false,
+  bayes: false,
+  isolation: false,
+  graph: false,
+  dataQuality: false,
   signals: false,
   agent: true,
   expert: false,
   history: false,
-  actions: true,
+  actions: false,
   data: false
 })
 const expertCollapse = ref([])
@@ -1320,10 +1567,78 @@ const dimensions = computed(() => dimensionMeta.map((item) => ({
   signalKey: item.signalKey,
   label: item.label,
   score: props.profile?.[item.scoreKey] || 0,
+  baseScore: Number(props.profile?.[`${item.signalKey}_base_score`] || props.profile?.[item.scoreKey] || 0),
+  spilloverScore: Number(props.profile?.[`${item.signalKey}_spillover_score`] || 0),
   reasons: groupedSignalsMap.value[item.signalKey] || []
 })))
 
 const dimensionItems = computed(() => dimensions.value)
+const sortedDimensionItems = computed(() =>
+  dimensions.value
+    .slice()
+    .sort((a, b) => {
+      const aPriority = Math.max(Number(a.spilloverScore || 0), Number(a.score || 0))
+      const bPriority = Math.max(Number(b.spilloverScore || 0), Number(b.score || 0))
+      return bPriority - aPriority
+    })
+)
+const focusDimensionItems = computed(() => {
+  const focused = sortedDimensionItems.value.filter((item) => item.spilloverScore > 0 || item.score >= 0.3)
+  return focused.length ? focused : sortedDimensionItems.value.slice(0, 3)
+})
+const secondaryDimensionItems = computed(() => {
+  const focusKeys = new Set(focusDimensionItems.value.map((item) => item.key))
+  return sortedDimensionItems.value.filter((item) => !focusKeys.has(item.key))
+})
+const overviewHighlights = computed(() => sortedDimensionItems.value.slice(0, 3))
+const majorIncidentDetected = computed(() => Boolean(props.profile?.major_incident_detected))
+const majorIncidentEvidence = computed(() => props.profile?.major_incident_evidence || [])
+const majorIncidentTypeText = computed(() => {
+  const types = props.profile?.major_incident_types || []
+  if (!types.length) return '恶性事件线索'
+  return types.slice(0, 3).join('、')
+})
+const incidentImpactItems = computed(() => dimensionMeta
+  .map((item) => ({
+    dimension: item.signalKey,
+    label: item.label,
+    baseScore: Number(props.profile?.[`${item.signalKey}_base_score`] || 0),
+    spilloverScore: Number(props.profile?.[`${item.signalKey}_spillover_score`] || 0),
+    totalScore: Number(props.profile?.[item.scoreKey] || 0),
+    isBnSuggested: isBnSuggestedDimension(item.signalKey),
+    note: buildIncidentImpactNote(item.signalKey)
+  }))
+  .filter((item) => item.spilloverScore > 0)
+  .sort((a, b) => b.spilloverScore - a.spilloverScore))
+const majorIncidentPropagationSignals = computed(() =>
+  (props.signals || []).filter((item) => item?.source === 'major_incident')
+)
+const majorIncidentBn = computed(() => props.profile?.major_incident_bn || {})
+const majorIncidentBnEnabled = computed(() => Boolean(majorIncidentBn.value?.enabled))
+const majorIncidentBnNodeItems = computed(() =>
+  (majorIncidentBn.value?.nodes || [])
+    .slice()
+    .sort((a, b) => Number(b?.probability || 0) - Number(a?.probability || 0))
+)
+const majorIncidentBnPathItems = computed(() =>
+  (majorIncidentBn.value?.paths || [])
+    .slice()
+    .sort((a, b) => Number(b?.path_probability || 0) - Number(a?.path_probability || 0))
+)
+const majorIncidentBnSuggestedItems = computed(() => {
+  const scores = majorIncidentBn.value?.suggested_spillover_scores || {}
+  return dimensionMeta
+    .map((item) => ({
+      dimension: item.signalKey,
+      label: item.label,
+      score: Number(scores?.[item.signalKey] || 0),
+      note: item.signalKey === 'study'
+        ? '前瞻风险，优先核查课堂专注、作业状态和短期波动。'
+        : '用于辅助判断可能的次生影响路径。'
+    }))
+    .filter((item) => item.score > 0)
+    .sort((a, b) => b.score - a.score)
+})
 const bayesCards = computed(() => {
   const bayesResults = props.profile?.bayes_results || {}
   const order = ['emotion', 'safety', 'family']
@@ -1535,6 +1850,8 @@ const displayAgentDimensions = computed(() =>
     evidence: normalizeEvidenceList(item?.evidence)
   }))
 )
+const agentMajorIncidentMode = computed(() => Boolean(props.agentResult?.result?.major_incident_mode))
+const agentSecondaryImpacts = computed(() => props.agentResult?.result?.secondary_impacts || [])
 
 const expertOutputs = computed(() => {
   const outputs = props.agentResult?.expert_outputs || []
@@ -1546,7 +1863,8 @@ const expertOutputs = computed(() => {
       result: {
         ...(item.result || {}),
         evidence: normalizeEvidenceList(item.result?.evidence)
-      }
+      },
+      view: buildExpertViewModel(item)
     }))
 })
 
@@ -1877,6 +2195,40 @@ function buildDimensionSummaryDetail(item) {
   return summary
 }
 
+function buildExpertViewModel(item) {
+  const result = item?.result || {}
+  const lead = buildDimensionSummaryLead(result || { dimension: item?.dimension })
+  const detail = buildDimensionSummaryDetail(result || {})
+  const score = Number(result?.score || 0)
+  const evidence = normalizeEvidenceList(result?.evidence)
+  const primaryEvidence = evidence[0] || ''
+  const dimension = item?.dimension || result?.dimension || ''
+  const majorIncident = Boolean(props.profile?.major_incident_detected)
+  const isSafetyEscalation = majorIncident && dimension === 'safety' && score >= 0.7
+  const isIncidentAttention = majorIncident && score >= 0.3
+  return {
+    lead,
+    detail,
+    tone: isSafetyEscalation ? '风险升高' : score >= 0.5 ? '明确预警' : isIncidentAttention ? '升级关注' : score >= 0.3 ? '持续关注' : '常规关注',
+    evidenceStatus: isSafetyEscalation
+      ? '高危安全线索已命中'
+      : evidence.length ? `已列出 ${evidence.length} 条依据` : '依据较少',
+    focus: isSafetyEscalation
+      ? '先核实风险是否仍持续'
+      : primaryEvidence ? '先核对首条依据' : '先补充事实核查',
+    primaryEvidence,
+    consistencyHint: item?.fallback
+      ? '本维度当前使用兜底解释，建议结合老师观察补充人工判断。'
+      : isSafetyEscalation
+        ? '当前不是相对平稳状态，应按安全事件持续性和影响面优先核查。'
+        : isIncidentAttention
+          ? '当前已进入事件后影响观察阶段，不建议按常规平稳个案理解。'
+      : detail
+        ? '已按统一结构展示为：结论先行、补充说明随后。'
+        : '当前以简要结论为主，适合快速横向比较各维度判断。'
+  }
+}
+
 const axes = computed(() => {
   const center = 160
   const radius = 110
@@ -1948,6 +2300,19 @@ function riskLabel(level) {
   }[level] || '待评估'
 }
 
+function displayRiskLabel(level, options = {}) {
+  const { majorIncident = false, overall = false } = options
+  if (majorIncident && overall) {
+    return {
+      low: '事件预警',
+      attention: '重点关注',
+      medium: '重点干预',
+      high: '紧急干预'
+    }[level] || riskLabel(level)
+  }
+  return riskLabel(level)
+}
+
 function trendLabel(trend) {
   return {
     up: '上升',
@@ -1995,7 +2360,9 @@ function sourceLabel(source) {
     agent_review: '教师复核',
     care_observation: '关怀观察',
     profile: '画像分数',
-    graph: '关系图谱'
+    graph: '关系图谱',
+    major_incident: '恶性事件传导',
+    major_incident_bn: '恶性事件BN传播'
   }[source] || source
 }
 
@@ -2014,6 +2381,8 @@ function dataGapLabel(signalType) {
 function signalBadgeLabel(item) {
   const weight = Number(item?.signal_weight || 0)
   if (item?.source === 'data_gap') return '证据不足'
+  if (item?.source === 'major_incident') return '事件后次生风险'
+  if (item?.source === 'major_incident_bn') return '前瞻预警'
   if (weight < 0) return '保护性证据'
   if (weight > 0 && weight <= 0.2 && ['attendance', 'behavior_event', 'score'].includes(item?.source)) {
     return '历史影响已衰减'
@@ -2024,11 +2393,26 @@ function signalBadgeLabel(item) {
 function signalBadgeClass(item) {
   const weight = Number(item?.signal_weight || 0)
   if (item?.source === 'data_gap') return 'evidence-chip--gap'
+  if (item?.source === 'major_incident') return 'evidence-chip--incident'
+  if (item?.source === 'major_incident_bn') return 'evidence-chip--incident'
   if (weight < 0) return 'evidence-chip--positive'
   if (weight > 0 && weight <= 0.2 && ['attendance', 'behavior_event', 'score'].includes(item?.source)) {
     return 'evidence-chip--attenuated'
   }
   return ''
+}
+
+function isBnSuggestedDimension(dimension) {
+  return (props.signals || []).some((item) =>
+    item?.source === 'major_incident_bn' && item?.dimension === dimension
+  )
+}
+
+function buildIncidentImpactNote(dimension) {
+  if (dimension === 'study' && isBnSuggestedDimension(dimension)) {
+    return '当前主要来自 BN 前瞻判断，表示已进入建议核查阶段，不直接等同于已出现明确学习异常。'
+  }
+  return '当前已进入事件后次生风险范围，建议结合老师观察继续核实。'
 }
 
 function dimensionLabel(dimension) {
@@ -2572,6 +2956,15 @@ function submitReview() {
   color: #dc2626;
 }
 
+.agent-incident-card {
+  display: grid;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: linear-gradient(135deg, rgba(255, 245, 245, 0.96) 0%, rgba(255, 250, 250, 0.98) 100%);
+  border: 1px solid rgba(239, 68, 68, 0.14);
+}
+
 .agent-dimensions {
   display: grid;
   gap: 12px;
@@ -2656,6 +3049,12 @@ function submitReview() {
   border: 1px solid rgba(148, 163, 184, 0.22);
 }
 
+.evidence-chip--incident {
+  color: #b42318;
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.18);
+}
+
 .evidence-chip--button {
   cursor: pointer;
 }
@@ -2702,6 +3101,256 @@ function submitReview() {
   line-height: 1.6;
 }
 
+.incident-card {
+  background: linear-gradient(180deg, #fff7f5 0%, #fff1ee 100%);
+}
+
+.incident-body {
+  margin-top: 14px;
+  display: grid;
+  gap: 14px;
+}
+
+.incident-summary-card {
+  padding: 14px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(239, 68, 68, 0.14);
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 14px;
+}
+
+.incident-summary-main {
+  display: grid;
+  gap: 6px;
+}
+
+.incident-summary-title,
+.incident-subtitle,
+.agent-incident-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: #991b1b;
+}
+
+.incident-summary-text,
+.incident-summary-caption,
+.incident-propagation-text,
+.agent-incident-text {
+  font-size: 12px;
+  line-height: 1.7;
+  color: #475569;
+}
+
+.incident-summary-side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.incident-evidence-list,
+.incident-propagation-list {
+  display: grid;
+  gap: 8px;
+}
+
+.incident-evidence-item,
+.incident-propagation-item {
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid rgba(239, 68, 68, 0.12);
+}
+
+.incident-impact-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.incident-bn-section {
+  display: grid;
+  gap: 12px;
+}
+
+.incident-bn-summary {
+  font-size: 12px;
+  line-height: 1.7;
+  color: #64748b;
+}
+
+.incident-impact-card {
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(239, 68, 68, 0.12);
+  display: grid;
+  gap: 10px;
+}
+
+.incident-impact-head,
+.incident-propagation-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+  font-weight: 700;
+  color: #1f2937;
+}
+
+.incident-impact-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.incident-impact-metric {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: #64748b;
+}
+
+.incident-impact-metric strong {
+  color: #0f172a;
+}
+
+.incident-bn-node-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.incident-bn-node-card,
+.incident-bn-path-card,
+.incident-bn-suggest-card {
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(148, 163, 184, 0.16);
+}
+
+.incident-bn-node-head,
+.incident-bn-path-head,
+.incident-bn-suggest-card {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  font-size: 13px;
+  font-weight: 700;
+  color: #1f2937;
+}
+
+.incident-bn-node-meta,
+.incident-bn-path-text {
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #64748b;
+}
+
+.incident-bn-node-evidence {
+  margin-top: 8px;
+  display: grid;
+  gap: 6px;
+}
+
+.incident-bn-node-evidence-item {
+  font-size: 12px;
+  line-height: 1.6;
+  color: #475569;
+}
+
+.incident-bn-path-list,
+.incident-bn-suggest-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.incident-bn-suggest-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.overview-strip {
+  margin-top: 12px;
+}
+
+.overview-card {
+  padding: 12px 14px;
+  border-radius: 16px;
+  background: linear-gradient(180deg, #fff 0%, #f8fafc 100%);
+  border: 1px solid rgba(148, 163, 184, 0.14);
+}
+
+.overview-card-title,
+.dimension-section-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: #1f2937;
+}
+
+.overview-chip-list {
+  margin-top: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.quality-chip--neutral {
+  color: #475569;
+  background: rgba(148, 163, 184, 0.12);
+  border: 1px solid rgba(148, 163, 184, 0.16);
+}
+
+.quality-chip--focus {
+  color: #1d4ed8;
+  background: rgba(59, 130, 246, 0.1);
+  border: 1px solid rgba(59, 130, 246, 0.16);
+}
+
+.dimension-section {
+  display: grid;
+  gap: 14px;
+}
+
+.dimension-secondary {
+  display: grid;
+  gap: 10px;
+}
+
+.dimension-list--secondary .dimension-item {
+  background: #fcfdff;
+}
+
+.subtle-toggle {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  border: none;
+  border-radius: 12px;
+  background: rgba(148, 163, 184, 0.08);
+  color: #475569;
+  padding: 10px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.dimension-split {
+  margin-top: 8px;
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  color: #64748b;
+}
+
 .agent-actions-title {
   font-size: 13px;
   font-weight: 700;
@@ -2712,6 +3361,36 @@ function submitReview() {
   margin-top: 8px;
   line-height: 1.7;
   color: #334155;
+}
+
+.agent-review-card {
+  margin-top: 10px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: #f8fafc;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+}
+
+.agent-review-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+  font-weight: 700;
+  color: #1f2937;
+}
+
+.agent-review-list {
+  margin-top: 8px;
+  display: grid;
+  gap: 8px;
+}
+
+.agent-review-item {
+  font-size: 12px;
+  line-height: 1.7;
+  color: #475569;
 }
 
 .bayes-card {
@@ -3292,6 +3971,39 @@ function submitReview() {
   line-height: 1.6;
 }
 
+.expert-consistency-grid {
+  margin-top: 10px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.expert-consistency-card {
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.78);
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.expert-consistency-label {
+  font-size: 12px;
+  color: #64748b;
+}
+
+.expert-key-point {
+  margin-top: 10px;
+  font-size: 12px;
+  line-height: 1.7;
+  color: #334155;
+}
+
+.expert-key-point--muted {
+  color: #64748b;
+}
+
 .expert-evidence {
   margin-top: 8px;
   padding-left: 16px;
@@ -3697,6 +4409,10 @@ function submitReview() {
   .isolation-metric-list,
   .isolation-coverage-grid,
   .isolation-source-group-list,
+  .incident-impact-grid,
+  .incident-bn-node-grid,
+  .incident-bn-suggest-grid,
+  .expert-consistency-grid,
   .quality-summary-grid,
   .review-grid {
     grid-template-columns: 1fr;

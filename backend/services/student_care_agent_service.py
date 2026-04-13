@@ -63,6 +63,7 @@ SOURCE_LABELS = {
     "assistant_summary": "AI对话摘要",
     "care_observation": "关怀观察",
     "graph": "关系图谱",
+    "major_incident": "恶性事件传导",
 }
 
 EXPERT_PROMPTS = {
@@ -643,6 +644,48 @@ def _get_latest_confirmed_teacher_feedback(db: Session, student_id: int) -> dict
     }
 
 
+def _build_major_incident_context(profile: dict, signals: list[dict]) -> dict:
+    detected = bool(profile.get("major_incident_detected"))
+    propagation_details = profile.get("major_incident_propagation_details") or []
+    evidence = [str(item) for item in (profile.get("major_incident_evidence") or []) if str(item).strip()][:4]
+    impacted_dimensions = []
+
+    dimension_breakdown = profile.get("dimension_breakdown") or {}
+    for dimension in profile.get("major_incident_impacted_dimensions") or []:
+        detail = dimension_breakdown.get(dimension) or {}
+        impacted_dimensions.append(
+            {
+                "dimension": dimension,
+                "label": DIMENSION_LABELS.get(dimension, dimension),
+                "base_score": round(float(detail.get("base_score") or 0), 4),
+                "spillover_score": round(float(detail.get("spillover_score") or 0), 4),
+                "total_score": round(float(detail.get("total_score") or profile.get(f"{dimension}_score") or 0), 4),
+            }
+        )
+
+    propagation_signals = [
+        {
+            "dimension": item.get("dimension"),
+            "signal_type": item.get("signal_type"),
+            "signal_text": item.get("signal_text"),
+            "signal_weight": round(float(item.get("signal_weight") or 0), 4),
+        }
+        for item in signals
+        if item.get("source") == "major_incident"
+    ][:6]
+
+    return {
+        "detected": detected,
+        "types": profile.get("major_incident_types") or [],
+        "confidence": round(float(profile.get("major_incident_confidence") or 0), 4),
+        "evidence": evidence,
+        "impacted_dimensions": impacted_dimensions,
+        "propagation_details": propagation_details,
+        "propagation_signals": propagation_signals,
+        "bn_analysis": profile.get("major_incident_bn") or {},
+    }
+
+
 def _sanitize_reviewed_result(original: dict, reviewed: dict) -> dict:
     sanitized = deepcopy(original or {})
     reviewed = reviewed or {}
@@ -807,6 +850,155 @@ def _build_overall_breakdown(result: StudentCareAgentResult) -> dict:
         "overall_score": overall_score,
         "delta": round(overall_score - total, 4),
     }
+
+
+def _build_review_suggestions(
+    dimensions: list[StudentCareAgentDimension],
+    major_incident_context: dict | None = None,
+) -> list[dict]:
+    major_incident_context = major_incident_context or {}
+    if major_incident_context.get("detected"):
+        secondary_checks = []
+        for item in major_incident_context.get("impacted_dimensions") or []:
+            label = item.get("label") or DIMENSION_LABELS.get(item.get("dimension"), item.get("dimension"))
+            spillover = float(item.get("spillover_score") or 0)
+            if spillover <= 0:
+                continue
+            secondary_checks.append(f"核查{label}是否已出现事件后的次生波动（传导贡献 {spillover:.2f}）")
+        checks = [
+            "先核实安全事实是否仍在持续，包括是否仍存在冲突、欺凌、威胁或围堵。",
+            "再核实学生是否已出现明显情绪受损，如紧张警觉、害怕、低落或回避表达。",
+        ]
+        checks.extend(secondary_checks)
+        if not secondary_checks:
+            checks.append("继续前瞻核查社交退缩、学习下滑和行为波动等次生影响是否开始显现。")
+
+        suggestions = [
+            {
+                "dimension": "safety",
+                "label": DIMENSION_LABELS.get("safety", "safety"),
+                "priority": "high",
+                "title": "优先核查恶性事件是否仍持续",
+                "checks": checks[:3],
+            }
+        ]
+        for item in major_incident_context.get("impacted_dimensions") or []:
+            dimension = item.get("dimension")
+            if dimension not in DIMENSION_LABELS or dimension == "safety":
+                continue
+            label = item.get("label") or DIMENSION_LABELS.get(dimension, dimension)
+            suggestions.append(
+                {
+                    "dimension": dimension,
+                    "label": label,
+                    "priority": "medium",
+                    "title": f"跟进{label}次生影响",
+                    "checks": _dimension_review_checks(dimension)[:2],
+                }
+            )
+            if len(suggestions) >= 3:
+                break
+        return suggestions
+
+    sorted_dimensions = sorted(dimensions, key=lambda item: float(item.score or 0), reverse=True)
+    suggestions = []
+    for item in sorted_dimensions:
+        score = float(item.score or 0)
+        if score < 0.3:
+            continue
+        label = DIMENSION_LABELS.get(item.dimension, item.dimension)
+        evidence = [str(row).strip() for row in (item.evidence or []) if str(row).strip()][:2]
+        checks = []
+        if evidence:
+            checks.append(f"先核对这些线索是否仍在持续：{'；'.join(evidence)}")
+        checks.extend(_dimension_review_checks(item.dimension))
+        deduped_checks = []
+        seen = set()
+        for check in checks:
+            if check in seen:
+                continue
+            seen.add(check)
+            deduped_checks.append(check)
+        suggestions.append(
+            {
+                "dimension": item.dimension,
+                "label": label,
+                "priority": "high" if score >= 0.5 else "medium",
+                "title": f"优先核查{label}",
+                "checks": deduped_checks[:3],
+            }
+        )
+        if len(suggestions) >= 3:
+            break
+    return suggestions
+
+
+def _dimension_review_checks(dimension: str) -> list[str]:
+    mapping = {
+        "social": [
+            "观察近一周课间、班级活动和小组合作中的同伴互动情况。",
+            "向班主任或任课老师核实是否存在独处、被动回避或同伴排斥。",
+            "确认是否已经安排同伴支持、活动参与或班级融入干预。",
+        ],
+        "emotion": [
+            "核对近一周情绪波动是否持续，必要时补充一次关怀谈话记录。",
+            "向班主任确认是否出现明显低落、易怒、回避交流等状态变化。",
+            "结合家校沟通判断情绪风险是否与近期事件相关。",
+        ],
+        "safety": [
+            "核查是否存在冲突、欺凌、受威胁或受伤等直接安全事实。",
+            "向相关老师确认近期是否出现需要立即处置的校园安全线索。",
+            "如线索明确，优先确认保护措施和后续跟进安排。",
+        ],
+        "family": [
+            "补充最近一次家校沟通，确认当前家庭支持是否稳定。",
+            "核实是否存在监护缺位、沟通冲突或照护资源不足。",
+            "确认家庭端是否愿意配合后续跟进。",
+        ],
+        "study": [
+            "核对近期作业、课堂表现和成绩变化是否一致指向学习压力。",
+            "向任课老师确认是否存在明显的任务拖延、畏难或状态下滑。",
+            "区分学业困难本身与情绪、家庭因素外溢带来的影响。",
+        ],
+        "behavior": [
+            "核查近两周出勤、违纪或课堂行为波动是否仍在持续。",
+            "向班主任确认是否存在回避参与、冲动或明显失稳表现。",
+            "区分偶发事件与持续性行为风险，避免把单次事件看成长期问题。",
+        ],
+    }
+    return mapping.get(dimension, ["建议结合最近校内事实补充一次人工核查。"])
+
+
+def _build_explanation_highlights(
+    result: StudentCareAgentResult,
+    major_incident_context: dict | None = None,
+) -> list[str]:
+    major_incident_context = major_incident_context or {}
+    dimensions = sorted(result.dimensions or [], key=lambda item: float(item.score or 0), reverse=True)
+    highlights = []
+    if major_incident_context.get("detected"):
+        impacted = [item.get("label") for item in major_incident_context.get("impacted_dimensions") if item.get("label")]
+        if impacted:
+            highlights.append(
+                "当前属于恶性事件后阶段，除安全事实外，还要前瞻核查"
+                + "、".join(impacted[:3])
+                + "等次生影响。"
+            )
+        else:
+            highlights.append("当前属于恶性事件后阶段，核查重点应从安全事实延伸到后续情绪、社交和学习影响。")
+    if dimensions:
+        top = dimensions[0]
+        top_label = DIMENSION_LABELS.get(top.dimension, top.dimension)
+        highlights.append(f"当前主要风险重心在{top_label}，建议优先核查这一维度。")
+    elevated = [DIMENSION_LABELS.get(item.dimension, item.dimension) for item in dimensions if float(item.score or 0) >= 0.3]
+    if len(elevated) >= 2:
+        highlights.append(f"目前同时受{elevated[0]}、{elevated[1]}影响，核查时要注意维度间是否存在传导。")
+    review_suggestions = result.review_suggestions or []
+    if review_suggestions:
+        checks = review_suggestions[0].get("checks") or []
+        if checks:
+            highlights.append(f"第一优先核查动作：{checks[0]}")
+    return highlights[:3]
 
 
 def _validate_dimension_result(result: StudentCareAgentDimension, expected_dimension: str | None = None) -> None:
@@ -1006,6 +1198,7 @@ async def evaluate_student_care_agent(db: Session, current_user, student_id: int
     profile = data.get("profile") or {}
     signals = data.get("signals") or []
     actions = data.get("actions") or []
+    major_incident_context = _build_major_incident_context(profile, signals)
 
     prompt_payload = {
         "student": student,
@@ -1016,6 +1209,7 @@ async def evaluate_student_care_agent(db: Session, current_user, student_id: int
         "actions": actions[:5],
         "bayes_results": profile.get("bayes_results", {}),
         "dimension_labels": DIMENSION_LABELS,
+        "major_incident_context": major_incident_context,
     }
     teacher_reviews = _list_recent_teacher_reviews(db, student_id)
     teacher_feedback_context = _get_latest_confirmed_teacher_feedback(db, student_id)
@@ -1023,6 +1217,7 @@ async def evaluate_student_care_agent(db: Session, current_user, student_id: int
     prompt_payload["teacher_feedback_context"] = teacher_feedback_context
     prompt_payload["care_fact_context"]["teacher_reviews"] = teacher_reviews
     prompt_payload["care_fact_context"]["teacher_feedback_context"] = teacher_feedback_context
+    prompt_payload["care_fact_context"]["major_incident_context"] = major_incident_context
 
     tag_definitions, unknown_tags = _resolve_tag_definitions(db, student)
     tag_web_context, student_care_web_context = await asyncio.gather(
@@ -1065,7 +1260,20 @@ async def evaluate_student_care_agent(db: Session, current_user, student_id: int
         result=result,
         raw_text=raw_text if fallback else None,
     )
+    response.result.review_suggestions = _build_review_suggestions(response.result.dimensions, major_incident_context)
+    response.result.explanation_highlights = _build_explanation_highlights(response.result, major_incident_context)
     response.result.overall_breakdown = _build_overall_breakdown(response.result)
+    response.result.major_incident_mode = bool(major_incident_context.get("detected"))
+    if major_incident_context.get("detected"):
+        secondary_labels = [item.get("label") for item in major_incident_context.get("impacted_dimensions") if item.get("label")]
+        response.result.major_incident_summary = (
+            "当前属于恶性事件后阶段，应先核实安全事实是否仍持续，再前瞻核查"
+            + ("、".join(secondary_labels[:3]) if secondary_labels else "情绪、社交与学习等次生影响")
+            + "。"
+        )
+        response.result.suggestions = [response.result.major_incident_summary] + list(response.result.suggestions or [])
+        response.result.suggestions = response.result.suggestions[:4]
+    response.result.secondary_impacts = major_incident_context.get("impacted_dimensions") or []
     record = StudentCareAgentRecord(
         student_id=student_id,
         model_name=response.model_name,
@@ -1107,6 +1315,8 @@ def _build_expert_prompts_v2(dimension: str, payload: dict) -> tuple[str, str]:
         + "????? graph_context ??????????????????????????????????????????"
         + "???? bayes_results ?????? posterior/final_score?????????????? evidence ??????????"
         + "?? care_fact_context.teacher_reviews ??????????????????????????????????"
+        + "?? major_incident_context.detected=true??????????????????????????????????????????????"
+        + "???????????????? impacted_dimensions ? propagation_signals ??????????????????"
         + "??????????????????????????????????????????"
         + "web_context ?????????????? evidence ?????? facts/signals?"
     )

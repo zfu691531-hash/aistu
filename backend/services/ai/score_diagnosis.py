@@ -15,6 +15,7 @@ from database.models.user import User
 from database.models.student import Student
 from database.models.score import Score
 from services.ai.base import ai_client, save_history
+from services.ai.student_profile_context import build_student_profile_context
 from services.user_service import get_student_by_user_id
 from core.response import success_response, error_response
 from utils.logger import logger
@@ -96,16 +97,20 @@ async def diagnose_score(
         subject_analysis.append(
             f"- {subject}：平均{avg:.1f}分，趋势{trend}（最近{len(score_list)}次：{'→'.join(map(str, score_list[-5:]))}）"
         )
+
+    profile_context = build_student_profile_context(db, student)
     
     system_prompt = """你是一位资深的学业分析师。
-请根据学生的成绩数据进行分析诊断，给出专业的学业建议。
+请根据学生的成绩数据和学生状态摘要进行分析诊断，给出专业、温和、可执行的学业建议。
 
 要求：
 1. 分析成绩变化趋势
 2. 找出优势科目和薄弱科目
-3. 给出针对性的改进建议
-4. 语言鼓励为主，指出问题时要有建设性
-5. 字数200-300字"""
+3. 结合学生当前状态，解释为什么最近表现可能会有波动，但不要夸大或贴标签
+4. 给出针对性的改进建议，并补充1-2条老师可采用的温和关怀建议
+5. 语言鼓励为主，指出问题时要有建设性
+6. 不要直接使用“高风险”“心理问题”“家庭困难”等标签化措辞
+7. 字数200-320字"""
 
     user_prompt = f"""学生：{student.name}
 成绩分析数据：
@@ -113,6 +118,9 @@ async def diagnose_score(
 
 详细成绩记录：
 {chr(10).join([f"- {s['exam_batch']} {s['subject']}: {s['score']}分" for s in score_data[-10:]])}
+
+学生关怀状态摘要：
+{profile_context["prompt_block"]}
 
 请给出诊断分析："""
 
@@ -132,4 +140,5 @@ async def diagnose_score(
         "diagnosis": result,
         "score_data": score_data,
         "subject_analysis": subject_analysis,
+        "profile_summary": profile_context["summary"],
     })

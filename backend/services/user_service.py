@@ -5,7 +5,7 @@
 - get_user_info: 查询当前用户个人信息
 - update_user_info: 修改个人信息（排除角色、账号等不可修改字段）
 - reset_password: 重置密码（需验证旧密码）
-- get_student_by_user_id: 通过user.name匹配student.name获取学生记录
+- get_student_by_user_id: 通过显式user_id或兼容规则获取学生记录
 """
 
 from typing import Optional
@@ -103,9 +103,7 @@ def reset_password(db: Session, user_id: int, old_password: str, new_password: s
 
 def get_student_by_user_id(db: Session, user_id: int) -> Optional[Student]:
     """
-    通过user.name匹配student.name获取学生记录
-    
-    说明：student表没有user_id字段，只能通过姓名匹配关联
+    优先通过 student.user_id 获取学生记录，兼容旧数据时回退到学号或姓名匹配。
     
     Args:
         db: 数据库会话
@@ -114,11 +112,91 @@ def get_student_by_user_id(db: Session, user_id: int) -> Optional[Student]:
     Returns:
         Student: 学生对象，未找到返回None
     """
-    # 1. 查询用户获取姓名
+    direct_student = db.query(Student).filter(Student.user_id == user_id).first()
+    if direct_student:
+        return direct_student
+
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         return None
-    
-    # 2. 通过姓名匹配学生
-    student = db.query(Student).filter(Student.name == user.name).first()
+
+    student = _find_student_by_user_identity(db, user)
+    if not student:
+        return None
+
+    if student.user_id in {None, user.id}:
+        student.user_id = user.id
+        db.commit()
+        db.refresh(student)
     return student
+
+
+def find_student_user_id(
+    db: Session,
+    student_no: str | None,
+    name: str | None,
+) -> int | None:
+    user = _find_student_user(db, student_no=student_no, name=name)
+    return user.id if user else None
+
+
+def _find_student_by_user_identity(db: Session, user: User) -> Optional[Student]:
+    candidates: list[Student] = []
+
+    student_no_candidates: list[str] = []
+    if user.username:
+        student_no_candidates.append(user.username)
+        if user.username.startswith("stu_"):
+            student_no_candidates.append(user.username.removeprefix("stu_"))
+
+    for candidate in student_no_candidates:
+        student = db.query(Student).filter(Student.student_no == candidate).first()
+        if student:
+            candidates.append(student)
+
+    if not candidates and user.name:
+        name_matches = db.query(Student).filter(Student.name == user.name).all()
+        if len(name_matches) == 1:
+            candidates.extend(name_matches)
+
+    for candidate in candidates:
+        if candidate.user_id not in {None, user.id}:
+            continue
+        return candidate
+    return None
+
+
+def _find_student_user(
+    db: Session,
+    student_no: str | None,
+    name: str | None,
+) -> Optional[User]:
+    usernames: list[str] = []
+    if student_no:
+        normalized_student_no = str(student_no).strip()
+        if normalized_student_no:
+            usernames.extend([normalized_student_no, f"stu_{normalized_student_no}"])
+
+    if usernames:
+        user = (
+            db.query(User)
+            .filter(User.role == "student", User.username.in_(usernames))
+            .order_by(User.id.asc())
+            .first()
+        )
+        if user:
+            return user
+
+    normalized_name = str(name or "").strip()
+    if not normalized_name:
+        return None
+
+    name_matches = (
+        db.query(User)
+        .filter(User.role == "student", User.name == normalized_name)
+        .order_by(User.id.asc())
+        .all()
+    )
+    if len(name_matches) == 1:
+        return name_matches[0]
+    return None

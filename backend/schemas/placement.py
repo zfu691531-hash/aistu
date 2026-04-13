@@ -19,6 +19,12 @@ class PlacementValidateRequest(BaseModel):
     assignments: List[PlacementAssignmentItem] = Field(default_factory=list, description="当前分班结果")
 
 
+class PlacementGenerateRequest(BaseModel):
+    grade: str = Field(..., description="年级")
+    target_classes: List[int] = Field(default_factory=list, description="目标班级 ID 列表，为空时默认当前年级全部有效班级")
+    constraints: Optional[dict] = Field(None, description="生成约束配置")
+
+
 class PlacementConfirmRequest(BaseModel):
     grade: str = Field(..., description="年级")
     batch_name: str = Field(..., description="批次名称")

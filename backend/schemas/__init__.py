@@ -10,8 +10,9 @@ from .user import LoginRequest, TokenResponse, PasswordChangeRequest, UserUpdate
 from .student import StudentCreate, StudentUpdate, StudentQuery, StudentResponse
 from .teacher import TeacherCreate, TeacherUpdate, TeacherQuery, TeacherResponse, TeacherBindClasses
 from .class_ import ClassCreate, ClassUpdate, ClassQuery, ClassResponse, ClassStudentBind
-from .grouping import GroupSchemeCreate, GroupSchemeUpdate, GroupSchemeQuery, GroupSchemeResponse
+from .grouping import GroupGenerateRequest, GroupSchemeCreate, GroupSchemeUpdate, GroupSchemeQuery, GroupSchemeResponse
 from .placement import (
+    PlacementGenerateRequest,
     PlacementAssignmentItem,
     PlacementBatchQuery,
     PlacementBatchResponse,
@@ -51,11 +52,13 @@ __all__ = [
     "ClassResponse",
     "ClassStudentBind",
     # Grouping
+    "GroupGenerateRequest",
     "GroupSchemeCreate",
     "GroupSchemeUpdate",
     "GroupSchemeQuery",
     "GroupSchemeResponse",
     # Placement
+    "PlacementGenerateRequest",
     "PlacementAssignmentItem",
     "PlacementBatchQuery",
     "PlacementBatchResponse",

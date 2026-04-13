@@ -25,6 +25,7 @@ from services.ai.base import ai_client
 from services.assistant_schema_guard import ensure_assistant_schema
 from services.rag import rule_rag_service
 from services.student_care_schema_guard import ensure_student_care_schema
+from services.user_service import get_student_by_user_id
 from services.web_search_service import search_web
 
 
@@ -285,31 +286,64 @@ def _answer_student_safety_disclosure(db: Session, current_user: User, content: 
 
 
 def _is_student_safety_disclosure(content: str | None) -> bool:
+    """Check if content contains student safety disclosure keywords.
+    
+    Improved logic:
+    1. Check for safety keywords first
+    2. If non-safety phrases exist, check remaining text for safety keywords
+    3. For "打"+"我" pattern, only trigger if clear violence context exists
+    """
     if not content:
         return False
     normalized = content.strip().lower()
-    if any(phrase in normalized for phrase in NON_SAFETY_PHRASES):
-        return False
-    if any(keyword in normalized for keyword in STUDENT_SAFETY_DISCLOSURE_KEYWORDS):
+    
+    # Step 1: Check for explicit safety keywords
+    has_safety_keyword = any(keyword in normalized for keyword in STUDENT_SAFETY_DISCLOSURE_KEYWORDS)
+    
+    # Step 2: Check if non-safety phrases mask the safety keywords
+    # e.g., "打游戏被打" should still trigger because of "被打"
+    if has_safety_keyword:
+        # Check if the safety keyword is part of a non-safety phrase
+        for phrase in NON_SAFETY_PHRASES:
+            if phrase in normalized:
+                # Remove the non-safety phrase and check again
+                remaining = normalized.replace(phrase, "")
+                if any(keyword in remaining for keyword in STUDENT_SAFETY_DISCLOSURE_KEYWORDS):
+                    return True
+                # If no safety keyword remains after removal, it's a false positive
+                return False
+        # Safety keyword exists and is not masked
         return True
-    return "打" in normalized and "我" in normalized
+    
+    # Step 3: For "打"+"我" pattern, require clear violence context
+    # This is very conservative - only trigger if there's clear violence indicator
+    if "打" in normalized and "我" in normalized:
+        # Non-violence contexts that should be excluded
+        non_violence_patterns = (
+            "打球", "打篮球", "打羽毛球", "打乒乓球", "打网球", "打排球",
+            "打酱油", "打工", "打的", "打扮", "打扰",
+            "打卡", "打电话", "打开", "打字", "打扫", "打游戏",
+            "打造", "打算", "打听",
+        )
+        # If any non-violence pattern exists, don't trigger
+        for pattern in non_violence_patterns:
+            if pattern in normalized:
+                return False
+        # Additional check: "打" should have a violence indicator nearby
+        # e.g., "打我", "打了我", "被打"
+        violence_indicators = ("打我", "打了我", "被打", "挨打")
+        for indicator in violence_indicators:
+            if indicator in normalized:
+                return True
+        # "我打" alone is ambiguous, don't trigger (avoid false positive)
+        # Only trigger if clear context like "我打他" + violence keywords exists
+        # But those cases are already handled by STUDENT_SAFETY_DISCLOSURE_KEYWORDS
+    
+    return False
 
 
 def _resolve_current_student(db: Session, current_user: User) -> Student | None:
-    candidates: list[str] = []
-    if current_user.username:
-        candidates.append(current_user.username)
-        if current_user.username.startswith("stu_"):
-            candidates.append(current_user.username.removeprefix("stu_"))
-    if current_user.name:
-        student = db.query(Student).filter(Student.name == current_user.name).first()
-        if student:
-            return student
-    for value in candidates:
-        student = db.query(Student).filter(Student.student_no == value).first()
-        if student:
-            return student
-    return None
+    return get_student_by_user_id(db, current_user.id)
 
 
 def _record_student_safety_disclosure(db: Session, student: Student, content: str) -> None:
@@ -703,9 +737,21 @@ def _build_system_prompt(current_user: User) -> str:
     now = datetime.now(ZoneInfo("Asia/Shanghai"))
     return (
         f"你是校园 AI 教务助手，当前服务对象是{role_name}。"
-        f"当前北京时间是 {now.year}年{now.month}月{now.day}日 {now:%H:%M}。"
-        "请优先基于角色权限、已知业务数据和校园场景来回答，同时也能自然回应用户的日常校园问题。"
-        "如果你不确定，请明确说明不确定，不要编造。"
+        f"当前北京时间是 {now.year}年{now.month}月{now.day}日 {now:%H:%M}。\n\n"
+        "【系统数据边界】\n"
+        "你目前接入的数据：学生档案、成绩信息、班级信息、校规知识库、教师信息。\n"
+        "你没有接入的数据：食堂菜单、图书馆藏、宿舍管理、班车时刻、校园活动、设备设施、校园地图、心理咨询、医务室、快递点等。\n\n"
+        "【回答规则】\n"
+        "1. 先判断：用户问的数据是否在你接入的范围内？\n"
+        "2. 如果不在范围内 → 必须拒绝，说明'我目前没有相关数据'，不要编造任何具体信息。\n"
+        "3. 如果在范围内 → 基于真实数据回答。\n\n"
+        "【正确示例】\n"
+        "用户：今天食堂吃什么？\n"
+        "回答：我目前没有食堂菜单数据，无法告诉你今天的菜品。建议你查看学校食堂公告或咨询后勤部门。\n\n"
+        "【禁止示例】\n"
+        "用户：今天食堂吃什么？\n"
+        "错误回答：今天食堂有红烧鸡腿、清炒虾仁... ← 这是幻觉！你根本没有这些数据，禁止编造！\n\n"
+        "记住：对于你没有的数据，宁可说'我不知道'，也不要编造任何具体内容。"
     )
 
 
@@ -1037,9 +1083,21 @@ def _build_system_prompt(current_user: User) -> str:
     now = datetime.now(ZoneInfo("Asia/Shanghai"))
     return (
         f"你是校园 AI 教务助手，当前服务对象是{role_name}。"
-        f"当前北京时间是 {now.year}年{now.month}月{now.day}日 {now:%H:%M}。"
-        "请优先基于角色权限、已知业务数据和校园场景来回答，同时也能自然回应用户的日常校园问题。"
-        "如果你不确定，请明确说明不确定，不要编造。"
+        f"当前北京时间是 {now.year}年{now.month}月{now.day}日 {now:%H:%M}。\n\n"
+        "【系统数据边界】\n"
+        "你目前接入的数据：学生档案、成绩信息、班级信息、校规知识库、教师信息。\n"
+        "你没有接入的数据：食堂菜单、图书馆藏、宿舍管理、班车时刻、校园活动、设备设施、校园地图、心理咨询、医务室、快递点等。\n\n"
+        "【回答规则】\n"
+        "1. 先判断：用户问的数据是否在你接入的范围内？\n"
+        "2. 如果不在范围内 → 必须拒绝，说明'我目前没有相关数据'，不要编造任何具体信息。\n"
+        "3. 如果在范围内 → 基于真实数据回答。\n\n"
+        "【正确示例】\n"
+        "用户：今天食堂吃什么？\n"
+        "回答：我目前没有食堂菜单数据，无法告诉你今天的菜品。建议你查看学校食堂公告或咨询后勤部门。\n\n"
+        "【禁止示例】\n"
+        "用户：今天食堂吃什么？\n"
+        "错误回答：今天食堂有红烧鸡腿、清炒虾仁... ← 这是幻觉！你根本没有这些数据，禁止编造！\n\n"
+        "记住：对于你没有的数据，宁可说'我不知道'，也不要编造任何具体内容。"
     )
 
 

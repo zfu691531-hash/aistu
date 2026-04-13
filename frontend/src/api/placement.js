@@ -8,6 +8,14 @@ export function getPlacementOverview(params) {
   })
 }
 
+export function generatePlacementWithProfile(data) {
+  return request({
+    url: '/placement/generate-with-profile',
+    method: 'post',
+    data
+  })
+}
+
 export function validatePlacement(data) {
   return request({
     url: '/placement/validate',

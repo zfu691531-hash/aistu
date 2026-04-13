@@ -31,6 +31,7 @@ from api import (
     student_care_data,
     tag_definitions,
     tag_reviews,
+    teacher_rule_assistant,
     students,
     teachers,
     users,
@@ -40,11 +41,13 @@ from database import models  # noqa: F401
 from database.base import Base
 from database.connection import engine
 from middleware.log_middleware import LogMiddleware
+from services.student_schema_guard import ensure_student_schema
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     Base.metadata.create_all(bind=engine, checkfirst=True)
     ensure_student_grade_column()
+    ensure_student_schema()
     normalize_legacy_grade_labels()
     yield
 
@@ -84,6 +87,7 @@ app.include_router(grouping.router)
 app.include_router(placement.router)
 app.include_router(school_rules.router)
 app.include_router(rule_rag.router)
+app.include_router(teacher_rule_assistant.router)
 app.include_router(rule_feedback.router)
 app.include_router(rule_kb.router)
 

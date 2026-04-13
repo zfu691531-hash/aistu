@@ -48,6 +48,7 @@
 
           <div class="action-row">
             <el-button type="primary" @click="handleLoadStudents">加载班级学生</el-button>
+            <el-button :loading="profileLoading" @click="handleGenerateProfilePlan">画像生成方案</el-button>
             <el-button :loading="aiLoading" @click="handleImportAiSuggestion">导入 AI 建议</el-button>
             <el-button @click="createEmptyGroups">新建空白分组</el-button>
             <el-button type="success" :loading="saveLoading" @click="handleSaveScheme">保存方案</el-button>
@@ -78,6 +79,32 @@
             </template>
           </el-table-column>
         </el-table>
+
+        <el-divider />
+
+        <div class="summary-stack">
+          <div class="summary-item">
+            <span>人数差</span>
+            <strong>{{ balanceReport.student_count_gap ?? '-' }}</strong>
+          </div>
+          <div class="summary-item">
+            <span>高风险人数差</span>
+            <strong>{{ balanceReport.high_risk_count_gap ?? '-' }}</strong>
+          </div>
+          <div class="summary-item">
+            <span>平均风险分差</span>
+            <strong>{{ balanceReport.avg_risk_score_gap ?? '-' }}</strong>
+          </div>
+        </div>
+
+        <el-alert
+          v-if="missingProfiles.length"
+          type="warning"
+          :closable="false"
+          show-icon
+          class="page-alert top-gap"
+          :title="`有 ${missingProfiles.length} 名学生缺少关怀画像，已按降级方式参与分组。`"
+        />
       </el-card>
     </div>
 
@@ -126,6 +153,9 @@
                   {{ getGroupSummary(group).assignedCount }} 人，男生 {{ getGroupSummary(group).maleCount }} 人，女生
                   {{ getGroupSummary(group).femaleCount }} 人，均分 {{ getGroupSummary(group).avgScore }}
                 </div>
+                <div class="card-desc" v-if="getGroupSummary(group).highRiskCount || getGroupSummary(group).avgRiskScore">
+                  高风险 {{ getGroupSummary(group).highRiskCount }} 人，平均风险分 {{ getGroupSummary(group).avgRiskScore }}
+                </div>
               </div>
               <el-button link type="warning" @click="clearGroup(group.group_no)">清空本组</el-button>
             </div>
@@ -160,6 +190,7 @@ import { getClassList } from '@/api/class_'
 import {
   createGroupingScheme,
   deleteGroupingScheme,
+  generateGroupingWithProfile,
   getGroupingSchemeDetail,
   getGroupingSchemes,
   updateGroupingScheme
@@ -174,9 +205,12 @@ const allStudents = ref([])
 const schemeList = ref([])
 const selectedPoolIds = ref([])
 const aiLoading = ref(false)
+const profileLoading = ref(false)
 const saveLoading = ref(false)
 const currentSchemeId = ref(null)
 const schemeSourceType = ref('manual')
+const balanceReport = ref({})
+const missingProfiles = ref([])
 
 const form = reactive({
   class_id: '',
@@ -255,7 +289,50 @@ function createEmptyGroups() {
     group_no: index + 1,
     student_ids: []
   }))
+  balanceReport.value = {}
+  missingProfiles.value = []
   selectedPoolIds.value = []
+}
+
+async function handleGenerateProfilePlan() {
+  if (!form.class_id) {
+    ElMessage.warning('请先选择班级')
+    return
+  }
+  if (!allStudents.value.length) {
+    await handleLoadStudents()
+  }
+
+  profileLoading.value = true
+  try {
+    const res = await generateGroupingWithProfile({
+      class_id: form.class_id,
+      group_count: form.group_count,
+      constraints: {
+        balance_risk: true,
+        ensure_support_distribution: true
+      }
+    })
+    const incomingStudents = (res.group_summaries || []).flatMap((group) => group.students || [])
+    if (incomingStudents.length) {
+      const merged = new Map(allStudents.value.map((item) => [item.id, item]))
+      incomingStudents.forEach((item) => merged.set(item.id, { ...merged.get(item.id), ...item }))
+      allStudents.value = [...merged.values()]
+    }
+    groups.value = (res.assignments || []).map((group) => ({
+      group_no: group.group_no,
+      student_ids: group.student_ids || []
+    }))
+    balanceReport.value = res.balance_report || {}
+    missingProfiles.value = res.missing_profiles || []
+    schemeSourceType.value = 'manual'
+    if (!form.scheme_name) {
+      form.scheme_name = `${currentClassName.value}-画像分组`
+    }
+    ElMessage.success('已生成画像分组方案')
+  } finally {
+    profileLoading.value = false
+  }
 }
 
 async function handleImportAiSuggestion() {
@@ -314,6 +391,8 @@ function getStudentsByIds(ids) {
 function getGroupSummary(group) {
   const students = getStudentsByIds(group.student_ids)
   const maleCount = students.filter((item) => item.gender === 'male').length
+  const highRiskCount = students.filter((item) => ['high', 'critical'].includes(item.risk_level)).length
+  const riskScores = students.map((item) => Number(item.risk_score)).filter((score) => !Number.isNaN(score))
   const avgScore = students.length
     ? (students.reduce((sum, item) => sum + Number(item.avg_score || 0), 0) / students.length).toFixed(1)
     : '0.0'
@@ -321,7 +400,9 @@ function getGroupSummary(group) {
     assignedCount: students.length,
     maleCount,
     femaleCount: students.length - maleCount,
-    avgScore
+    avgScore,
+    highRiskCount,
+    avgRiskScore: riskScores.length ? (riskScores.reduce((sum, score) => sum + score, 0) / riskScores.length).toFixed(3) : '0.000'
   }
 }
 
@@ -429,6 +510,8 @@ function applyAiSuggestion(res) {
     form.scheme_name = `${currentClassName.value}-AI建议分组`
   }
   schemeSourceType.value = 'ai'
+  balanceReport.value = {}
+  missingProfiles.value = []
 }
 
 async function tryLoadDraft() {
@@ -525,6 +608,29 @@ async function tryLoadDraft() {
   flex-wrap: wrap;
   gap: 8px;
   justify-content: flex-end;
+}
+
+.summary-stack {
+  display: grid;
+  gap: 10px;
+}
+
+.summary-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: #f8fafc;
+  color: #475569;
+}
+
+.summary-item strong {
+  color: #0f172a;
+}
+
+.top-gap {
+  margin-top: 16px;
 }
 
 @media (max-width: 1100px) {

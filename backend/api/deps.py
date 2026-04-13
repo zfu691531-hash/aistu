@@ -14,8 +14,14 @@ from jose import JWTError
 from sqlalchemy.orm import Session
 
 from core.security import decode_access_token
-from database.connection import get_db
+from database.connection import get_db as raw_get_db
 from database.models.user import User
+from services.student_schema_guard import ensure_student_schema
+
+
+def get_db():
+    ensure_student_schema()
+    yield from raw_get_db()
 
 
 def get_current_user(

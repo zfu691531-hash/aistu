@@ -25,7 +25,12 @@ class StudentCareAgentResult(BaseModel):
     overall_level: str
     suggestions: List[str] = Field(default_factory=list)
     dimensions: List[StudentCareAgentDimension] = Field(default_factory=list)
+    review_suggestions: List[dict[str, Any]] = Field(default_factory=list)
+    explanation_highlights: List[str] = Field(default_factory=list)
     overall_breakdown: Optional[dict] = None
+    major_incident_mode: bool = False
+    major_incident_summary: Optional[str] = None
+    secondary_impacts: List[dict[str, Any]] = Field(default_factory=list)
 
 
 class StudentCareAgentEvalOut(BaseModel):

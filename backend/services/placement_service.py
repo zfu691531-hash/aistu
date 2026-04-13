@@ -45,7 +45,7 @@ def validate_assignments(
         return auth_error
 
     summary_or_error = _build_validation_summary(db, grade, assignments)
-    if isinstance(summary_or_error, dict) and summary_or_error.get("code") != 200:
+    if isinstance(summary_or_error, dict) and "code" in summary_or_error and summary_or_error.get("code") != 200:
         return summary_or_error
     return success_response(msg="分班结果校验通过", data=summary_or_error)
 
@@ -64,7 +64,7 @@ def confirm_assignments(
         return auth_error
 
     validation = _build_validation_summary(db, grade, assignments)
-    if isinstance(validation, dict) and validation.get("code") != 200:
+    if isinstance(validation, dict) and "code" in validation and validation.get("code") != 200:
         return validation
 
     target_class_map = {

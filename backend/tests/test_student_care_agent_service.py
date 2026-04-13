@@ -241,6 +241,9 @@ def test_evaluate_student_care_agent_runs_six_experts_and_records(monkeypatch):
     assert data["result"]["overall_breakdown"]["overall_score"] == 0.1204
     assert data["result"]["dimensions"][0]["score_breakdown"]
     assert data["result"]["dimensions"][0]["score_explanation"]
+    assert data["result"]["review_suggestions"]
+    assert data["result"]["review_suggestions"][0]["checks"]
+    assert data["result"]["explanation_highlights"]
     assert calls.count("light-model") == 6
     assert calls.count("strong-model") == 0
     assert fake_db.committed is True
@@ -258,6 +261,8 @@ def test_evaluate_student_care_agent_runs_six_experts_and_records(monkeypatch):
     assert fake_db.added[0].input_snapshot["care_fact_context"]["teacher_feedback_context"]["review_labels"]["scene"] == "social_isolation"
     assert fake_db.added[0].input_snapshot["bayes_results"]["safety"]["posterior"] == 0.34
     assert fake_db.added[0].input_snapshot["graph_context"]["enabled"] is False
+    assert fake_db.added[0].result_json["review_suggestions"]
+    assert fake_db.added[0].result_json["explanation_highlights"]
     assert fake_db.added[0].input_snapshot["web_context"][0]["query"] == "学生迟到缺勤早退 班主任关怀干预建议"
 
 

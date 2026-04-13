@@ -13,6 +13,7 @@ from database.models.school_rule_chunk import SchoolRuleChunk
 from services.ai.base import ai_client
 from services.rag.milvus_store import MilvusRuleStore
 from services.rag.schema_guard import ensure_rule_rag_schema
+from services.rag.rule_intent import extract_structured_terms_for_keywords
 from services.rag.vector_utils import dense_vector, normalize_dense_vector, sparse_milvus_vector, tokenize
 from utils.logger import logger
 
@@ -42,7 +43,7 @@ def rebuild_rule_index(db: Session, rule_id: int) -> dict:
         db.query(SchoolRuleChunk).filter(SchoolRuleChunk.rule_id == rule.id).delete(synchronize_session=False)
         milvus_store.delete_rule_chunks(rule.id)
 
-        chunks = _chunk_rule(rule.title, rule.content)
+        chunks = _chunk_rule(rule.category, rule.title, rule.content)
         embedding_vectors = ai_client.embed_texts(
             chunks,
             model_name=getattr(settings, "AI_EMBEDDING_MODEL_NAME", "") or None,
@@ -50,6 +51,8 @@ def rebuild_rule_index(db: Session, rule_id: int) -> dict:
         saved_rows = []
         for index, text in enumerate(chunks):
             token_list = tokenize(text)
+            structured_terms = extract_structured_terms_for_keywords(text, category=rule.category)
+            keyword_terms = list(dict.fromkeys(token_list[:20] + structured_terms))
             if len(embedding_vectors) == len(chunks) and embedding_vectors[index]:
                 dense_row = normalize_dense_vector(embedding_vectors[index])
                 dense_model_name = getattr(settings, "AI_EMBEDDING_MODEL_NAME", "") or "remote-embedding"
@@ -61,7 +64,7 @@ def rebuild_rule_index(db: Session, rule_id: int) -> dict:
                 rule_version=next_version,
                 chunk_index=index,
                 chunk_text=text,
-                keywords_json=token_list[:20],
+                keywords_json=keyword_terms,
                 sparse_vector_meta_json={"token_count": len(token_list)},
                 dense_model_name=dense_model_name,
                 sparse_model_name="token-counter-v1",
@@ -121,8 +124,8 @@ def delete_rule_index(db: Session, rule_id: int) -> None:
     milvus_store.delete_rule_chunks(rule_id)
 
 
-def _chunk_rule(title: str, content: str, chunk_size: int = 240) -> list[str]:
-    text = f"{title}\n{content}".strip()
+def _chunk_rule(category: str, title: str, content: str, chunk_size: int = 240) -> list[str]:
+    text = f"分类: {category}\n标题: {title}\n{content}".strip()
     if len(text) <= chunk_size:
         return [text]
 

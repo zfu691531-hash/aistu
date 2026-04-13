@@ -38,6 +38,7 @@
 
           <div class="action-row">
             <el-button type="primary" @click="handleLoadOverview">加载待分班学生</el-button>
+            <el-button :loading="profileLoading" @click="handleGenerateProfilePlan">画像生成方案</el-button>
             <el-button :loading="aiLoading" @click="handleImportAiSuggestion">导入 AI 建议</el-button>
             <el-button @click="createEmptyAssignments">新建空白分班</el-button>
             <el-button :loading="validateLoading" @click="handleValidate">校验结果</el-button>
@@ -79,6 +80,32 @@
           <el-table-column prop="female_count" label="女生" width="90" />
           <el-table-column prop="avg_score" label="均分" width="90" />
         </el-table>
+
+        <el-divider />
+
+        <div class="report-grid">
+          <div class="overview-item">
+            <div class="overview-label">人数差</div>
+            <div class="overview-value report-value">{{ balanceReport.student_count_gap ?? '-' }}</div>
+          </div>
+          <div class="overview-item">
+            <div class="overview-label">高风险人数差</div>
+            <div class="overview-value report-value">{{ balanceReport.high_risk_count_gap ?? '-' }}</div>
+          </div>
+          <div class="overview-item">
+            <div class="overview-label">平均风险分差</div>
+            <div class="overview-value report-value">{{ balanceReport.avg_risk_score_gap ?? '-' }}</div>
+          </div>
+        </div>
+
+        <el-alert
+          v-if="missingProfiles.length"
+          type="warning"
+          :closable="false"
+          show-icon
+          class="page-alert top-gap"
+          :title="`有 ${missingProfiles.length} 名学生缺少关怀画像，已按降级方式参与分班。`"
+        />
       </el-card>
     </div>
 
@@ -127,6 +154,9 @@
                 <div class="card-title">{{ item.class_name }}</div>
                 <div class="card-desc">
                   {{ getAssignmentSummary(item).assignedCount }} / {{ item.max_count }} 人，男生 {{ getAssignmentSummary(item).maleCount }} 人，女生 {{ getAssignmentSummary(item).femaleCount }} 人，均分 {{ getAssignmentSummary(item).avgScore }}
+                </div>
+                <div class="card-desc" v-if="getAssignmentSummary(item).highRiskCount || getAssignmentSummary(item).avgRiskScore">
+                  高风险 {{ getAssignmentSummary(item).highRiskCount }} 人，平均风险分 {{ getAssignmentSummary(item).avgRiskScore }}
                 </div>
               </div>
               <el-button link type="warning" @click="clearAssignment(item.class_id)">清空</el-button>
@@ -202,6 +232,7 @@ import { generateGroup } from '@/api/aiTools'
 import { getClassList } from '@/api/class_'
 import {
   confirmPlacement,
+  generatePlacementWithProfile,
   getPlacementBatchDetail,
   getPlacementBatches,
   getPlacementOverview,
@@ -210,6 +241,7 @@ import {
 import { downloadWordDocument } from '@/utils/export'
 
 const aiLoading = ref(false)
+const profileLoading = ref(false)
 const validateLoading = ref(false)
 const confirmLoading = ref(false)
 const batchDialogVisible = ref(false)
@@ -223,6 +255,8 @@ const assignments = ref([])
 const batchList = ref([])
 const currentBatch = ref(null)
 const validationSummary = ref(null)
+const balanceReport = ref({})
+const missingProfiles = ref([])
 
 const form = reactive({
   grade: '',
@@ -288,7 +322,55 @@ function createEmptyAssignments() {
     student_ids: []
   }))
   validationSummary.value = null
+  balanceReport.value = {}
+  missingProfiles.value = []
   selectedPoolIds.value = []
+}
+
+async function handleGenerateProfilePlan() {
+  if (!form.grade) {
+    ElMessage.warning('请先选择年级')
+    return
+  }
+  if (!targetClasses.value.length || !allStudents.value.length) {
+    await handleLoadOverview()
+  }
+
+  profileLoading.value = true
+  try {
+    const res = await generatePlacementWithProfile({
+      grade: form.grade,
+      target_classes: targetClasses.value.map((item) => item.id),
+      constraints: {
+        balance_risk: true,
+        disperse_high_risk: true
+      }
+    })
+    const incomingStudents = (res.class_summaries || []).flatMap((item) => item.students || [])
+    if (incomingStudents.length) {
+      const merged = new Map(allStudents.value.map((item) => [item.id, item]))
+      incomingStudents.forEach((item) => merged.set(item.id, { ...merged.get(item.id), ...item }))
+      allStudents.value = [...merged.values()]
+    }
+    assignments.value = (res.assignments || []).map((item) => {
+      const target = targetClasses.value.find((classItem) => classItem.id === item.class_id)
+      return {
+        class_id: item.class_id,
+        class_name: target?.name || `班级${item.class_id}`,
+        max_count: target?.max_count || 0,
+        student_ids: item.student_ids || []
+      }
+    })
+    validationSummary.value = res.validation_summary || { class_summaries: [] }
+    balanceReport.value = res.balance_report || {}
+    missingProfiles.value = res.missing_profiles || []
+    if (!form.batch_name) {
+      form.batch_name = `${form.grade}画像分班`
+    }
+    ElMessage.success('已生成画像分班方案')
+  } finally {
+    profileLoading.value = false
+  }
 }
 
 async function handleImportAiSuggestion() {
@@ -354,6 +436,8 @@ function getStudentsByIds(ids) {
 function getAssignmentSummary(item) {
   const students = getStudentsByIds(item.student_ids)
   const maleCount = students.filter((student) => student.gender === 'male').length
+  const highRiskCount = students.filter((student) => ['high', 'critical'].includes(student.risk_level)).length
+  const riskScores = students.map((student) => Number(student.risk_score)).filter((score) => !Number.isNaN(score))
   const avgScore = students.length
     ? (students.reduce((sum, student) => sum + Number(student.avg_score || 0), 0) / students.length).toFixed(1)
     : '0.0'
@@ -361,7 +445,9 @@ function getAssignmentSummary(item) {
     assignedCount: students.length,
     maleCount,
     femaleCount: students.length - maleCount,
-    avgScore
+    avgScore,
+    highRiskCount,
+    avgRiskScore: riskScores.length ? (riskScores.reduce((sum, score) => sum + score, 0) / riskScores.length).toFixed(3) : '0.000'
   }
 }
 
@@ -512,6 +598,12 @@ function handleExport() {
   gap: 12px;
 }
 
+.report-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
 .overview-item {
   padding: 16px;
   border-radius: 16px;
@@ -530,6 +622,14 @@ function handleExport() {
   color: #1e293b;
 }
 
+.report-value {
+  font-size: 20px;
+}
+
+.top-gap {
+  margin-top: 16px;
+}
+
 @media (max-width: 1100px) {
   .page-shell,
   .workspace {
@@ -537,6 +637,10 @@ function handleExport() {
   }
 
   .overview-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .report-grid {
     grid-template-columns: 1fr;
   }
 }

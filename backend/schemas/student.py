@@ -46,6 +46,7 @@ class StudentResponse(BaseModel):
 
     id: int
     student_no: str
+    user_id: Optional[int]
     name: str
     gender: str
     age: int

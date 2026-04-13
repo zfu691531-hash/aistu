@@ -23,6 +23,7 @@ from services import tag_review_service
 from services.student_care_graph_service import student_care_graph_service
 from services.student_care_service import recalculate_student_care_profile
 from services.user_service import get_student_by_user_id
+from services.user_service import find_student_user_id
 from utils.logger import logger
 
 
@@ -90,6 +91,7 @@ def get_list(
                 {
                     "id": student.id,
                     "student_no": student.student_no,
+                    "user_id": student.user_id,
                     "name": student.name,
                     "gender": student.gender,
                     "age": student.age,
@@ -147,6 +149,7 @@ def create(
 
     student = Student(
         student_no=student_no,
+        user_id=find_student_user_id(db, student_no=student_no, name=name),
         name=name,
         gender=gender,
         age=age,
@@ -256,6 +259,11 @@ def update(
         student.tags = tags
     if grade is not _UNSET and student.class_id is None:
         student.grade = grade
+
+    if student.user_id is None:
+        next_student_no = student.student_no
+        next_name = student.name
+        student.user_id = find_student_user_id(db, student_no=next_student_no, name=next_name)
 
     db.commit()
     db.refresh(student)
@@ -380,6 +388,7 @@ def import_excel(db: Session, current_user: User, file: UploadFile) -> dict:
         db.add(
             Student(
                 student_no=student_no,
+                user_id=find_student_user_id(db, student_no=student_no, name=name),
                 name=name,
                 gender=gender,
                 age=age,

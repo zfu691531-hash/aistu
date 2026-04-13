@@ -8,6 +8,14 @@ export function getGroupingSchemes(params) {
   })
 }
 
+export function generateGroupingWithProfile(data) {
+  return request({
+    url: '/grouping/generate-with-profile',
+    method: 'post',
+    data
+  })
+}
+
 export function getGroupingSchemeDetail(id) {
   return request({
     url: `/grouping/schemes/${id}`,
