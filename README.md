@@ -1,244 +1,233 @@
-# 校园 AI 教务助手平台
+<div align="center">
 
-这是一个面向中小学教务与学生发展场景的校园智能平台，整合了基础教务管理、学生关怀研判、学生画像、校规知识服务、智能分组分班和多种 AI 教务工具。项目既能承载日常教务数据管理，也能支撑“学生关怀”这一更具展示价值的智能分析闭环。
+# 🏫 AISTU - 校园 AI 教务助手平台
 
-## 项目概览
+**Smart Campus Educational Administration Platform with AI-Powered Student Care**
 
-- 面向场景：中小学教务管理、学生画像、学生关怀、校规知识服务、教师 AI 辅助。
-- 核心价值：把校园结构化数据、规则推断、概率修正和智能体分析整合到同一套平台里。
-- 展示重点：学生关怀模块，强调可解释、可复核、可持续优化的研判闭环。
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/Python-3.11-blue.svg)](https://python.org)
+[![Vue](https://img.shields.io/badge/Vue-3.4-brightgreen.svg)](https://vuejs.org)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.135-teal.svg)](https://fastapi.tiangolo.com)
 
-## 核心能力
+[English](#overview) · [功能特性](#-功能特性) · [快速开始](#-快速开始) · [架构设计](#-架构设计) · [文档](#-文档)
 
-- 基础教务管理：学生、教师、班级、成绩、标签等基础模块。
-- 学生关怀研判：六维画像、风险信号抽取、智能研判、教师复核。
-- 校规知识服务：校规录入、检索、问答与规则引用。
-- AI 教务工具：评语生成、成绩诊断、公告润色、班会策划等。
-- 智能辅助决策：图谱增强、贝叶斯修正、专项场景分析、分组分班辅助。
+</div>
 
-## 学生关怀亮点
+---
 
-学生关怀是本项目最有辨识度的核心能力，重点不是“给学生打一个风险分”，而是把校园里的多源事实组织成可解释、可复核、可持续优化的研判体系。
+## Overview
 
-- 多源信号融合：综合成绩、考勤、行为事件、家校沟通、教师观察、AI 摘要等数据生成学生画像。
-- 六维风险画像：围绕情绪、社交、安全、家庭、学习、行为六个维度形成结构化关怀画像。
-- 规则层 + 概率层 + 智能层混合架构：先做稳定可控的规则评分，再用贝叶斯修正概率，最后用多智能体输出可解释分析。
-- 边际递减与时间衰减：避免同类证据被机械叠加，同时让近期信号比历史信号更有判断价值。
-- 保护性证据显式建模：不仅识别负向风险，也识别缓解、改善、支持性证据，降低误报。
-- 社交孤立专项分析：把社交孤立从一般分数偏低升级为可专项解释、可单独展示、可单独调优的场景能力。
-- 图谱关系增强：通过关系网络识别“单条记录看不出，但放在关系里有意义”的社交与安全信号。
-- 多智能体分维研判：不同专家分别解释不同维度，最后由整合节点输出综合结论、建议与置信度。
-- 教师复核闭环：支持真风险确认、误报标记、已解决回写，并将复核结果用于后续评估和规则优化。
+AISTU is an intelligent campus platform for K-12 schools, combining traditional educational administration with AI-powered student care analytics. It goes beyond simple risk scoring — it builds an **explainable, reviewable, and continuously improvable** student care inference system.
 
-## 平台定位
+The platform integrates structured campus data, rule-based inference, Bayesian probability correction, and multi-agent analysis into a unified workflow, enabling teachers to manage daily administration tasks and receive intelligent student care insights in one place.
 
-项目不是单一教务系统，也不是单一 AI 助手，而是把结构化校园数据与智能分析能力放到同一个工作台里。老师可以在一套系统中完成学生信息维护、成绩与过程数据查看、学生关怀研判、标签审核、校规问答和 AI 工具调用。
+## ✨ 功能特性
 
-当前平台可以理解为两条主线并行：
+### 📋 基础教务管理
+- Student, teacher, class, and score management
+- Tag system with review and approval workflow
+- Excel import/export with template support
 
-- 教务管理主线：学生、教师、班级、成绩、标签、校规等基础数据的统一管理。
-- 智能辅助主线：学生画像、风险研判、规则解释、知识检索和 AI 生成能力的闭环应用。
+### 🧠 学生关怀研判 (Core Highlight)
+- **Six-Dimension Risk Profile**: Emotion, social, safety, family, academic, behavior
+- **Multi-Agent Inference**: Expert agents analyze each dimension, then synthesize conclusions
+- **Bayesian Correction**: Dynamic priors and likelihood ratios for evidence accumulation
+- **Social Isolation Detection**: Dedicated analysis module beyond general risk scoring
+- **Graph-Enhanced Insights**: Neo4j relationship network reveals hidden social and safety signals
+- **Teacher Review Loop**: Confirm real risks, mark false positives, write-back resolutions
 
-## 架构概览
+### 📚 校规知识服务
+- School rule entry, vector search, and AI-powered Q&A
+- Rule citation in student care inference
 
-### 平台整体架构
+### 🤖 AI 教务工具
+- Comment generation, score diagnosis, notice polishing, meeting planning
+- Interview preparation, discipline analysis, group assignment
 
-```text
-Frontend (Vue 3 + Element Plus)
-  -> Backend API (FastAPI)
-     -> Business Services
-        -> MySQL / SQLAlchemy
-        -> Milvus 向量检索
-        -> Neo4j 图谱关系增强
-        -> LangChain / LangGraph 智能体编排
+### 🎯 智能分组分班
+- Balanced class assignment based on student profiles
+- Teacher grouping optimization
+
+## 🚀 快速开始
+
+### Prerequisites
+
+| Service | Version | Purpose |
+|---------|---------|---------|
+| Python | 3.11+ | Backend runtime |
+| Node.js | 18+ | Frontend runtime |
+| MySQL | 8.0+ | Primary data store |
+| Milvus | 2.x | Vector search for school rules |
+| Neo4j | 5.x | Graph relationship analysis |
+
+### One-Click Start
+
+```bash
+# Clone the repository
+git clone https://github.com/zfu691531-hash/aistu.git
+cd aistu
+
+# Start both frontend and backend
+python main.py
 ```
 
-### 整体代码架构
-
-```text
-aistu
-├─ frontend/
-│  ├─ src/views/           页面级视图，承载学生、成绩、关怀、校规等业务界面
-│  ├─ src/components/      通用组件与业务组件
-│  ├─ src/stores/          Pinia 状态管理
-│  ├─ src/router/          前端路由
-│  ├─ src/api/             接口调用封装
-│  └─ src/utils/           前端工具函数
-├─ backend/
-│  ├─ api/                 FastAPI 路由层，对外暴露 REST 接口
-│  ├─ services/            业务核心层，承载教务、学生关怀、RAG、分组分班等能力
-│  ├─ schemas/             请求与响应模型
-│  ├─ core/                配置、常量与底层能力封装
-│  ├─ database/            数据库连接与基础持久化支持
-│  │  └─ models/           数据库模型与持久化实体
-│  ├─ scripts/             初始化、补数、演示案例脚本
-│  └─ tests/               后端测试
-└─ docs/                   产品、架构、演示与答辩文档
-```
-
-### 代码分层关系
-
-```text
-Vue 页面 / 组件
-  -> 前端 api 封装 / stores
-     -> FastAPI 路由层 (backend/api)
-        -> 业务服务层 (backend/services)
-           -> 数据访问与模型层
-              -> MySQL / Milvus / Neo4j
-           -> AI / RAG / LangGraph 能力
-```
-
-### 代码组织思路
-
-- 前端负责页面交互、状态管理和接口编排，不直接承载复杂业务判断。
-- `backend/api` 负责接口边界、鉴权接入和参数组织，尽量保持轻量。
-- `backend/services` 是核心业务层，学生关怀、校规问答、分组分班等关键能力都在这一层实现。
-- 数据库、向量检索、图谱和智能体能力通过服务层统一编排，避免逻辑散落在路由或页面里。
-- `scripts` 和 `tests` 分别承担演示数据准备、初始化任务和回归验证，便于项目展示与迭代。
-
-### 学生关怀分层架构
-
-```text
-数据输入层
-  学生档案 / 成绩考勤 / 行为事件 / 家校沟通 / AI 摘要 / 图谱关系
-    ->
-信号抽取层
-  风险信号提取 / 文本线索识别 / 保护性证据识别 / 时间衰减
-    ->
-基础规则层
-  六维权重计算 / 事件映射 / 边际递减 / 基础风险聚合
-    ->
-贝叶斯修正层
-  动态先验 / 似然比修正 / 后验概率更新 / 专项网络推断
-    ->
-多智能体解释层
-  六维专家分析 / 整合结论 / 行动建议 / 置信度评估
-    ->
-输出与反馈层
-  学生画像 / 智能研判 / 教师复核 / 评估优化
-```
-
-### 为什么这套架构适合学生关怀
-
-- 规则层保证下限：即使不调用大模型，也能输出稳定、可解释的画像结果。
-- 贝叶斯层负责修正：适合处理多证据累积、证据相关性和专项场景概率更新。
-- 多智能体层负责解释：把复杂信号转成教师更容易理解和复核的分维分析。
-- 反馈层形成闭环：系统不是“一次算完”，而是可以随着教师复核不断调整和优化。
-
-## 核心模块
-
-| 模块 | 主要能力 | 面向角色 |
-| --- | --- | --- |
-| 学生管理 | 学生档案、过程记录、班级归属管理 | 教师、校务管理员 |
-| 教师管理 | 教师信息、任课关系、班主任绑定 | 校务管理员 |
-| 班级管理 | 班级信息、班主任关联、学生归班 | 教师、校务管理员 |
-| 成绩管理 | 考试批次、学科成绩、趋势对比 | 教师、校务管理员 |
-| 学生关怀 | 风险信号抽取、六维画像、智能研判、教师复核 | 教师 |
-| 标签管理 | 标签定义、审核、沉淀与复用 | 教师、校务管理员 |
-| 智能分组分班 | 教师分组、均衡分班辅助 | 教师、校务管理员 |
-| 校规服务 | 校规录入、向量检索、问答与规则引用 | 教师、学生、校务管理员 |
-| AI 教务工具 | 评语生成、成绩诊断、公告润色、班会策划等 | 教师 |
-
-## 技术栈
-
-### 后端
-
-- FastAPI：提供 REST API 与接口文档
-- SQLAlchemy：负责 ORM 与数据库访问
-- MySQL：存储业务主数据
-- LangChain / LangGraph：编排智能体与多步推理流程
-- Milvus：承载校规知识检索与向量能力
-- Neo4j：承载学生关系增强与图谱分析
-
-### 前端
-
-- Vue 3：页面与组件开发
-- Vite：开发与构建工具
-- Element Plus：后台界面组件
-- Pinia：状态管理
-- Axios：统一接口调用与拦截处理
-
-## 快速开始
-
-### 后端
+### Backend Setup
 
 ```bash
 cd backend
-# 安装依赖
-# 配置 .env
-# 启动服务
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Configure environment
+cp .env.example .env
+# Edit .env with your database and AI service credentials
+
+# Initialize database
+mysql -u root -p < ../docs/init_database.sql
+
+# Start the server
+python main.py
 ```
 
-### 前端
+### Frontend Setup
 
 ```bash
 cd frontend
-# 安装依赖
-# 配置接口地址
-# 启动开发服务或构建
+
+# Install dependencies
+npm install
+
+# Configure API endpoint (edit src/api/config.js if needed)
+
+# Start dev server
+npm run dev
+
+# Or build for production
+npm run build
 ```
 
-### 依赖服务
+### Demo Accounts
 
-- MySQL：业务主数据存储
-- Milvus：向量检索与校规知识服务
-- Neo4j：关系增强与图谱分析
+| Username | Password | Role |
+|----------|----------|------|
+| admin | admin123 | Administrator |
+| wang_math | teacher123 | Teacher |
+| stu_2024001 | student123 | Student |
 
-说明：本项目适合配合本地容器环境一起运行。
+## 🏗️ 架构设计
 
-## 关键实现入口
+### Platform Architecture
 
-下列文件构成了学生关怀能力的主链路：
+```
+Frontend (Vue 3 + Element Plus)
+  → Backend API (FastAPI)
+    → Business Services
+      → MySQL / SQLAlchemy        (Primary data)
+      → Milvus                     (Vector search)
+      → Neo4j                      (Graph analysis)
+      → LangChain / LangGraph      (Agent orchestration)
+```
 
-| 文件 | 主要职责 |
-| --- | --- |
-| `backend/services/student_care_service.py` | 关怀画像构建、基础评分、画像刷新 |
-| `backend/services/student_care_agent_service.py` | 多智能体研判、综合结论、复核评估统计 |
-| `backend/services/student_care_bayes_service.py` | 贝叶斯辅助修正与证据处理 |
-| `backend/services/student_care_isolation_service.py` | 社交孤立专项分析与贝叶斯网络推断 |
-| `backend/services/student_care_graph_service.py` | 图谱关系增强与图信号生成 |
-| `backend/services/assistant_service.py` | AI 摘要、高危文本线索与助手能力 |
-| `backend/api/student_care.py` | 学生关怀相关 API 出口 |
-| `frontend/src/views/student/StudentCareDrawer.vue` | 单个学生画像与研判结果展示 |
-| `frontend/src/views/student/StudentCareEvaluationPage.vue` | 复核评估、统计与系统概览 |
+### Student Care Inference Pipeline
 
-## 目录结构
+```
+Data Input → Signal Extraction → Rule Scoring → Bayesian Correction → Multi-Agent Analysis → Teacher Review
+```
 
-| 路径 | 说明 |
-| --- | --- |
-| `backend/` | 后端服务、业务逻辑、模型、脚本与测试 |
-| `backend/api/` | FastAPI 路由入口 |
-| `backend/services/` | 核心业务服务与学生关怀实现 |
-| `backend/scripts/` | 初始化、补数、演示案例脚本 |
-| `backend/tests/` | 后端测试 |
-| `frontend/` | 前端页面、组件、状态管理与构建配置 |
-| `docs/` | 产品、技术、演示、答辩与实施文档 |
+<div align="center">
+  <img src="docs/assets/care-architecture.png" alt="Student Care Architecture" width="600">
+</div>
 
-## 当前状态
+**Why this architecture works:**
 
-- 基础教务模块已可用，覆盖学生、教师、班级、成绩等常见管理流程。
-- 学生关怀模块已形成从多源信号到教师复核的完整闭环。
-- 校规知识服务、AI 工具和智能辅助能力已能支撑演示与答辩场景。
+| Layer | Role | Guarantee |
+|-------|------|-----------|
+| Rule Layer | Stable, explainable base scoring | Even without LLM, produces reliable profiles |
+| Bayesian Layer | Probability correction with evidence | Handles multi-evidence accumulation and correlation |
+| Agent Layer | Dimension-specific expert analysis | Translates complex signals into teacher-friendly insights |
+| Feedback Layer | Continuous improvement loop | Teacher reviews refine future assessments |
 
-## 演示与阅读建议
+## 📁 项目结构
 
-如果你是第一次接触这个项目，推荐按下面顺序阅读：
+```
+aistu/
+├── backend/
+│   ├── api/                  # FastAPI route handlers
+│   ├── services/             # Core business logic
+│   │   ├── student_care_*.py # Student care inference pipeline
+│   │   ├── ai/               # AI tool services
+│   │   └── ...               # CRUD & export services
+│   ├── schemas/              # Request/response models
+│   ├── core/                 # Config, constants, auth
+│   ├── database/models/      # SQLAlchemy ORM models
+│   ├── scripts/              # Init & demo data scripts
+│   └── tests/                # Test suite
+├── frontend/
+│   ├── src/views/            # Page-level views
+│   ├── src/components/       # Shared & business components
+│   ├── src/stores/           # Pinia state management
+│   ├── src/router/           # Vue Router config
+│   ├── src/api/              # API client modules
+│   └── src/utils/            # Utility functions
+├── docs/                     # Documentation & assets
+└── main.py                   # One-click launcher
+```
 
-1. `README.md`：先看项目定位、学生关怀亮点和整体架构。
-2. `学生关怀智能研判体系设计.md`：再看学生关怀的业务闭环、分层设计和实现边界。
-3. `学生关怀关键技术亮点说明.md`：适合做汇报、答辩或架构说明。
-4. `docs/学生关怀模块产品介绍-2026-04-10.md`：适合面向产品或演示讲解。
-5. `docs/演示账号与案例说明-2026-04-10.md`：适合配合实际页面演示使用。
+## 🔑 Key Implementation Files
 
-## 适用场景
+The student care inference pipeline:
 
-- 课程设计或毕业设计项目展示
-- 校园管理数字化方案演示
-- 学生画像与学生关怀专题汇报
-- 多智能体、规则引擎、贝叶斯推断结合的应用示例
+| File | Responsibility |
+|------|---------------|
+| `backend/services/student_care_service.py` | Profile construction, base scoring, refresh |
+| `backend/services/student_care_agent_service.py` | Multi-agent inference, synthesis, review stats |
+| `backend/services/student_care_bayes_service.py` | Bayesian correction & evidence processing |
+| `backend/services/student_care_isolation_service.py` | Social isolation专项 analysis |
+| `backend/services/student_care_graph_service.py` | Neo4j graph signal generation |
+| `backend/services/assistant_service.py` | AI summary, risk text extraction |
+| `backend/api/student_care.py` | Student care API endpoints |
 
-## 说明
+## 🛠️ 技术栈
 
-- 学生关怀与风险识别能力定位为教师辅助决策，不替代教师判断。
-- 研判结果需要结合真实校园制度、观察记录和家校沟通共同使用。
-- 对外展示时，建议配合演示数据和案例文档，效果会明显优于只展示静态页面。
+| Category | Technology |
+|----------|-----------|
+| **Backend Framework** | FastAPI + Uvicorn |
+| **ORM** | SQLAlchemy + Alembic |
+| **Database** | MySQL 8.0 |
+| **AI Orchestration** | LangChain + LangGraph |
+| **Vector Search** | Milvus |
+| **Graph Database** | Neo4j |
+| **Frontend Framework** | Vue 3 + Vite |
+| **UI Library** | Element Plus |
+| **State Management** | Pinia |
+| **HTTP Client** | Axios |
+
+## 📖 文档
+
+| Document | Description |
+|----------|-------------|
+| [学生关怀智能研判体系设计](docs/学生关怀智能研判体系设计.md) | Business loop, layered design, implementation scope |
+| [学生关怀关键技术亮点说明](docs/学生关怀关键技术亮点说明.md) | Technical highlights for presentation & review |
+| [学生关怀多智能体风险研判方案](docs/学生关怀多智能体风险研判方案.md) | Multi-agent risk inference methodology |
+| [项目技术架构总览](docs/项目技术架构总览.md) | Full architecture overview |
+| [数据库初始化SQL](docs/init_database.sql) | Database DDL (v1.1.0) |
+| [演示账号与案例说明](docs/演示账号与案例说明-2026-04-10.md) | Demo accounts & walkthrough |
+
+## ⚠️ Disclaimer
+
+- Student care and risk identification capabilities are designed as **decision-support tools for teachers**, not replacements for professional judgment.
+- Inference results should be used in conjunction with real campus observations, records, and home-school communication.
+- For public demonstrations, use provided demo data and case documentation.
+
+## 📄 License
+
+This project is licensed under the [MIT License](LICENSE).
+
+---
+
+<div align="center">
+
+**If this project helps you, please consider giving it a ⭐!**
+
+</div>

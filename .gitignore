@@ -1,4 +1,4 @@
-# 环境变量
+# Environment
 .env
 !.env.example
 
@@ -6,37 +6,51 @@
 __pycache__/
 *.pyc
 *.pyo
+*.pyd
+.Python
+*.egg-info/
+*.egg
+.eggs/
+dist/
+build/
 .pytest_cache/
 pytest-cache-files-*/
 venv/
 .venv/
+.conda/
 
 # Node
 node_modules/
-dist/
+frontend/dist/
 
 # IDE
 .idea/
 .vscode/
+.cursor/
 *.swp
+*.swo
+*~
 
-# 数据库迁移版本（开发阶段不进 git）
+# Database migrations (dev)
 backend/alembic/versions/*.py
 !backend/alembic/versions/.gitkeep
 
-# Neo4j 数据文件
-.docker/neo4j/data/
+# Docker / Neo4j
+.docker/
 
-# Conda 环境
-.conda/
-
-# 日志
+# Logs
 *.log
 logs/
 
 # OS
 .DS_Store
 Thumbs.db
+Desktop.ini
+ehthumbs.db
 
-# Jupyter/评估缓存
+# Jupyter / eval cache
 .jbeval/
+
+# Misc
+*.bak
+*.tmp
